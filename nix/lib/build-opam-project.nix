@@ -102,13 +102,6 @@ let
     filter = if srcFilter != null then srcFilter else defaultSrcFilter;
   };
 
-  # A depext names a nixpkgs attribute, sometimes a nested one.
-  depext =
-    attr:
-    lib.attrByPath (lib.splitString "." attr)
-      (throw "opam-purifier: a locked package needs the system package `${attr}`, which this package set does not have; pass it in `buildInputs`.")
-      pkgs;
-
   platformEnv = {
     OPAMVAR_arch =
       {
@@ -137,7 +130,7 @@ let
         pkg-config
       ]
       ++ nativeBuildInputs;
-      buildInputs = map depext solution.depexts ++ buildInputs;
+      buildInputs = import ./depexts.nix { inherit lib pkgs; } solution ++ buildInputs;
       dontConfigure = true;
       # opam runs the tests during its install when doCheck is set.
       dontCheck = true;
@@ -153,7 +146,9 @@ let
         project="$PWD"
         bash ${state}/bin/install-dependencies "$out" "$project"
         export OPAMSWITCH="$out"
-        opam install --ignore-pin-depends ${lib.optionalString doCheck' "--with-test"} ./
+        opam install --ignore-pin-depends ${lib.optionalString doCheck' "--with-test"} ${
+          lib.escapeShellArgs (map (p: "./" + p.opamFile) lock.packages)
+        }
         # The files each of the project's packages installed, which the
         # lock run records as the outputs.
         mkdir -p "$out/nix-support/opam-purifier-files"

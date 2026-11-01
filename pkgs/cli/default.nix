@@ -65,6 +65,15 @@ stdenvNoCC.mkDerivation {
       }
     runHook postInstall
   '';
+  # The unit tests of the script (tests/test_opam_purifier.py) run
+  # against the installed copy.
+  doInstallCheck = true;
+  installCheckPhase = ''
+    runHook preInstallCheck
+    OPAM_PURIFIER_SCRIPT="$out/libexec/opam-purifier.py" \
+      ${python3}/bin/python3 ${../../tests/test_opam_purifier.py} -v
+    runHook postInstallCheck
+  '';
   meta = {
     description = "Locks the files an opam project downloads, so that Nix can build it offline";
     license = lib.licenses.mit;

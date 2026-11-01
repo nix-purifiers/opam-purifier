@@ -3,7 +3,15 @@
 # Reads an opam-purifier lockfile (written by `opam-purifier lock`).
 { lockFile }:
 let
-  lock = builtins.fromJSON (builtins.readFile lockFile);
+  text = builtins.readFile lockFile;
+  lock =
+    let
+      parsed = builtins.tryEval (builtins.fromJSON text);
+    in
+    if parsed.success && builtins.isAttrs parsed.value then
+      parsed.value
+    else
+      throw "opam-purifier: ${toString lockFile} is not a lockfile (it is not a JSON object); run `opam-purifier relock` to write it again.";
 
   supportedVersion = import ./lock-version.nix;
 
@@ -29,10 +37,22 @@ let
       parts = builtins.filter builtins.isString (builtins.split "/" download.path);
     in
     storeName (builtins.elemAt parts (builtins.length parts - 1));
+
+  # The hash the lockfile carries of its own content, the one
+  # bin/opam-purifier computes (lock_hash): the SHA-256 of the lockfile
+  # without `lockHash`, as compact JSON.
+  intact =
+    (lock.lockHash or null)
+    == "sha256:${builtins.hashString "sha256" (builtins.toJSON (removeAttrs lock [ "lockHash" ]))}";
 in
 assert
-  lock.version == supportedVersion
-  || throw "opam-purifier: ${toString lockFile} has lock format version ${toString lock.version}; this library reads version ${toString supportedVersion}. Run `opam-purifier relock` with the opam-purifier version that provides this library.";
+  (lock.version or null) == supportedVersion
+  || throw "opam-purifier: ${toString lockFile} has lock format version ${
+    toString (lock.version or "none")
+  }; this library reads version ${toString supportedVersion}. Run `opam-purifier relock` with the opam-purifier version that provides this library.";
+assert
+  intact
+  || throw "opam-purifier: ${toString lockFile} was changed after `opam-purifier lock` wrote it (its lockHash does not match its content); run `opam-purifier relock`.";
 lock
 // {
   inherit storeName downloadName;

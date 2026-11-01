@@ -137,7 +137,8 @@ let
     #!${bash}/bin/bash
     # Sets up the opam root at $OPAMROOT and creates the switch at $1,
     # with the locked packages installed. $2 is the project root that
-    # pins of project directories are below; the default is $1.
+    # pins of project directories are below; the default is $1. A third
+    # argument `--with-tools` also installs the tools the lock holds.
     set -euo pipefail
     state=@state@
     prefix="$1"
@@ -158,6 +159,14 @@ let
     ${lib.optionalString (solution.install != [ ]) ''
       opam install ${lib.escapeShellArgs solution.install}
     ''}
+    # The tools the lock holds for the interactive mode (opam-purifier lock
+    # --tool), when the third argument asks for them.
+    if [ "''${3:-}" = --with-tools ]; then
+      ${lib.optionalString (solution.tools or [ ] != [ ]) ''
+        opam install ${lib.escapeShellArgs solution.tools}
+      ''}
+      :
+    fi
   '';
 in
 runCommand "opam-purifier-state"

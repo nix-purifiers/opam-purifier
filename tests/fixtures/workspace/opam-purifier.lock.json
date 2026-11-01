@@ -1,14 +1,16 @@
 {
   "version": 1,
   "opam": "2.6.1",
-  "definitionHash": "sha256:e1fcf6875cad0b3fbb781d934d3f669dd49316acf9a2c3dc66e1159e5fdf03bb",
+  "definitionHash": "sha256:3a4f73a036afb221775fd29d6725ece1f562508abaa9480b303c246ed7d87b19",
   "options": {
     "repositories": [
       {
         "name": "default",
-        "url": "https://opam.ocaml.org"
+        "url": "archive+https://github.com/ocaml/opam-repository/archive/2ffc3518756432a5bea7cda8ae467ea8b4e0362a.tar.gz"
       }
     ],
+    "only": [],
+    "tools": [],
     "withTest": true,
     "withDoc": false,
     "locked": false
@@ -63,6 +65,7 @@
         "topkg.1.1.1",
         "uutf.1.0.3"
       ],
+      "tools": [],
       "depexts": []
     },
     "aarch64-linux": {
@@ -83,6 +86,7 @@
         "topkg.1.1.1",
         "uutf.1.0.3"
       ],
+      "tools": [],
       "depexts": []
     }
   },
@@ -139,7 +143,7 @@
     },
     {
       "path": "packages/ocaml/ocaml.5.2.1/opam",
-      "contents": "opam-version: \"2.0\"\n# These packages are part of the infrastructure for maintaining the OCaml\n# compiler dependencies in opam. It's not possible to version the metadata\n# itself, because opam's versioning provides no mechanism to ignore the\n# revision (i.e. we don't have a way to have two revisions of ocaml.5.4.1 but\n# where \"ocaml\" {= \"5.4.1\"} would always mean to use the latest revision).\n# It is however useful to know which version of the metadata is installed.\n# This number should be bumped whenever a pertinent change is made.\nx-revision: \"4\"\nlicense: \"LGPL-2.1-or-later WITH OCaml-LGPL-linking-exception\"\nsynopsis: \"The OCaml compiler (virtual package)\"\ndescription: \"\"\"\nThis package requires a matching implementation of OCaml,\nand polls it to initialise specific variables like `ocaml:native-dynlink`\"\"\"\nmaintainer: \"David Allsopp <dra27@dra27.uk>\"\ndepends: [\n  \"ocaml-config\" {>= \"3\"}\n  \"ocaml-base-compiler\" {>= \"5.2.1~\" & < \"5.2.2~\" } |\n  \"ocaml-variants\" {>= \"5.2.1~\" & < \"5.2.2~\"} |\n  \"ocaml-system\" {>= \"5.2.1~\" & < \"5.2.2~\"} |\n  \"dkml-base-compiler\" {>= \"5.2.1~\" & < \"5.2.2~\"}\n  (\"ocaml-env-mingw64\" {os = \"win32\"} | \"ocaml-env-mingw32\" {os = \"win32\"})\n]\nsetenv: [\n  [OCAMLTOP_INCLUDE_PATH += \"%{toplevel}%\"]\n  [CAML_LD_LIBRARY_PATH = \"%{_:stubsdir}%\"]\n  [CAML_LD_LIBRARY_PATH += \"%{lib}%/stublibs\"]\n  # Legacy opam variable\n  [OCAML_TOPLEVEL_PATH = \"%{toplevel}%\"]\n]\nx-env-path-rewrite: [\n  [CAML_LD_LIBRARY_PATH (\";\" {os = \"win32\"} \":\" {os != \"win32\"}) \"target\"]\n  [OCAMLTOP_INCLUDE_PATH (\";\" {os = \"win32\"} \":\" {os != \"win32\"}) \"target\"]\n]\nbuild: [\"ocaml\" \"%{ocaml-config:share}%/gen_ocaml_config.ml\" _:version _:name]\nbuild-env: [\n  [CAML_LD_LIBRARY_PATH = \"\"]\n  [LSAN_OPTIONS = \"detect_leaks=0,exitcode=0\"]\n  [ASAN_OPTIONS = \"detect_leaks=0,exitcode=0\"]\n]\nhomepage: \"https://ocaml.org\"\nbug-reports: \"https://github.com/ocaml/opam-repository/issues\"\nauthors: [\n  \"Xavier Leroy\"\n  \"Damien Doligez\"\n  \"Alain Frisch\"\n  \"Jacques Garrigue\"\n  \"Didier R\u00e9my\"\n  \"KC Sivaramakrishnan\"\n  \"J\u00e9r\u00f4me Vouillon\"\n]\nflags: conf\n"
+      "contents": "opam-version: \"2.0\"\n# These packages are part of the infrastructure for maintaining the OCaml\n# compiler dependencies in opam. It's not possible to version the metadata\n# itself, because opam's versioning provides no mechanism to ignore the\n# revision (i.e. we don't have a way to have two revisions of ocaml.5.4.1 but\n# where \"ocaml\" {= \"5.4.1\"} would always mean to use the latest revision).\n# It is however useful to know which version of the metadata is installed.\n# This number should be bumped whenever a pertinent change is made.\nx-revision: \"4\"\nlicense: \"LGPL-2.1-or-later WITH OCaml-LGPL-linking-exception\"\nsynopsis: \"The OCaml compiler (virtual package)\"\ndescription: \"\"\"\nThis package requires a matching implementation of OCaml,\nand polls it to initialise specific variables like `ocaml:native-dynlink`\"\"\"\nmaintainer: \"David Allsopp <dra27@dra27.uk>\"\ndepends: [\n  \"ocaml-config\" {>= \"3\"}\n  \"ocaml-base-compiler\" {>= \"5.2.1~\" & < \"5.2.2~\" } |\n  \"ocaml-variants\" {>= \"5.2.1~\" & < \"5.2.2~\"} |\n  \"ocaml-system\" {>= \"5.2.1~\" & < \"5.2.2~\"} |\n  \"dkml-base-compiler\" {>= \"5.2.1~\" & < \"5.2.2~\"}\n  (\"ocaml-env-mingw64\" {os = \"win32\"} | \"ocaml-env-mingw32\" {os = \"win32\"})\n]\nsetenv: [\n  [OCAMLTOP_INCLUDE_PATH += \"%{toplevel}%\"]\n  [CAML_LD_LIBRARY_PATH = \"%{_:stubsdir}%\"]\n  [CAML_LD_LIBRARY_PATH += \"%{lib}%/stublibs\"]\n  # Legacy opam variable\n  [OCAML_TOPLEVEL_PATH = \"%{toplevel}%\"]\n]\nx-env-path-rewrite: [\n  [CAML_LD_LIBRARY_PATH (\";\" {os = \"win32\"} \":\" {os != \"win32\"}) \"target\"]\n  [OCAMLTOP_INCLUDE_PATH (\";\" {os = \"win32\"} \":\" {os != \"win32\"}) \"target\"]\n]\nbuild: [\"ocaml\" \"%{ocaml-config:share}%/gen_ocaml_config.ml\" _:version _:name]\nbuild-env: [\n  [CAML_LD_LIBRARY_PATH = \"\"]\n  [LSAN_OPTIONS = \"detect_leaks=0,exitcode=0\"]\n  [ASAN_OPTIONS = \"detect_leaks=0,exitcode=0\"]\n]\nhomepage: \"https://ocaml.org\"\nbug-reports: \"https://github.com/ocaml/opam-repository/issues\"\nauthors: [\n  \"Xavier Leroy\"\n  \"Damien Doligez\"\n  \"Alain Frisch\"\n  \"Jacques Garrigue\"\n  \"Didier Rémy\"\n  \"KC Sivaramakrishnan\"\n  \"Jérôme Vouillon\"\n]\nflags: conf\n"
     },
     {
       "path": "packages/ocamlbuild/ocamlbuild.0.16.1/opam",
@@ -151,7 +155,7 @@
     },
     {
       "path": "packages/topkg/topkg.1.1.1/opam",
-      "contents": "opam-version: \"2.0\"\nsynopsis: \"The transitory OCaml software packager\"\ndescription: \"\"\"\\\n**Warning** Topkg is in maintenance mode and should not longer be used.\n\nTopkg is a packager for distributing OCaml software. It provides an\nAPI to describe the files a package installs in a given build\nconfiguration and to specify information about the package's\ndistribution, creation and publication procedures.\n\nThe optional topkg-care package provides the `topkg` command line tool\nwhich helps with various aspects of a package's life cycle: creating\nand linting a distribution, releasing it on the WWW, publish its\ndocumentation, add it to the OCaml opam repository, etc.\n\nTopkg is distributed under the ISC license and has **no**\ndependencies. This is what your packages will need as a *build*\ndependency.\n\nTopkg-care is distributed under the ISC license it depends on\n[fmt][fmt], [logs][logs], [bos][bos], [cmdliner][cmdliner],\n[webbrowser][webbrowser] and `opam-format`.\n\n[fmt]: http://erratique.ch/software/fmt\n[logs]: http://erratique.ch/software/logs\n[bos]: http://erratique.ch/software/bos\n[cmdliner]: http://erratique.ch/software/cmdliner\n[webbrowser]: http://erratique.ch/software/webbrowser\n\nHome page: <http://erratique.ch/software/topkg>\"\"\"\nmaintainer: \"Daniel B\u00fcnzli <daniel.buenzl i@erratique.ch>\"\nauthors: \"The topkg programmers\"\nlicense: \"ISC\"\ntags: [\"packaging\" \"ocamlbuild\" \"org:erratique\"]\nhomepage: \"https://erratique.ch/software/topkg\"\ndoc: \"https://erratique.ch/software/topkg/doc\"\nbug-reports: \"https://github.com/dbuenzli/topkg/issues\"\ndepends: [\n  \"ocaml\" {>= \"4.08.0\"}\n  \"ocamlfind\" {build & >= \"1.6.1\"}\n  \"ocamlbuild\"\n]\nbuild: [\"ocaml\" \"pkg/pkg.ml\" \"build\" \"--pkg-name\" name \"--dev-pkg\" \"%{dev}%\"]\ndev-repo: \"git+https://erratique.ch/repos/topkg.git\"\nurl {\n  src: \"https://erratique.ch/software/topkg/releases/topkg-1.1.1.tbz\"\n  checksum:\n    \"sha512=c36c549a362ddf5b7fe3f6ff91c79b7ab531c43633bb9737576370bcbd69db7e1625d247c278a869b503d45a175e9753231ccf595e5bfa4e3b7e2602ac3d3b42\"\n}\nx-maintenance-intent: [\"(latest)\"]"
+      "contents": "opam-version: \"2.0\"\nsynopsis: \"The transitory OCaml software packager\"\ndescription: \"\"\"\\\n**Warning** Topkg is in maintenance mode and should not longer be used.\n\nTopkg is a packager for distributing OCaml software. It provides an\nAPI to describe the files a package installs in a given build\nconfiguration and to specify information about the package's\ndistribution, creation and publication procedures.\n\nThe optional topkg-care package provides the `topkg` command line tool\nwhich helps with various aspects of a package's life cycle: creating\nand linting a distribution, releasing it on the WWW, publish its\ndocumentation, add it to the OCaml opam repository, etc.\n\nTopkg is distributed under the ISC license and has **no**\ndependencies. This is what your packages will need as a *build*\ndependency.\n\nTopkg-care is distributed under the ISC license it depends on\n[fmt][fmt], [logs][logs], [bos][bos], [cmdliner][cmdliner],\n[webbrowser][webbrowser] and `opam-format`.\n\n[fmt]: http://erratique.ch/software/fmt\n[logs]: http://erratique.ch/software/logs\n[bos]: http://erratique.ch/software/bos\n[cmdliner]: http://erratique.ch/software/cmdliner\n[webbrowser]: http://erratique.ch/software/webbrowser\n\nHome page: <http://erratique.ch/software/topkg>\"\"\"\nmaintainer: \"Daniel Bünzli <daniel.buenzl i@erratique.ch>\"\nauthors: \"The topkg programmers\"\nlicense: \"ISC\"\ntags: [\"packaging\" \"ocamlbuild\" \"org:erratique\"]\nhomepage: \"https://erratique.ch/software/topkg\"\ndoc: \"https://erratique.ch/software/topkg/doc\"\nbug-reports: \"https://github.com/dbuenzli/topkg/issues\"\ndepends: [\n  \"ocaml\" {>= \"4.08.0\"}\n  \"ocamlfind\" {build & >= \"1.6.1\"}\n  \"ocamlbuild\"\n]\nbuild: [\"ocaml\" \"pkg/pkg.ml\" \"build\" \"--pkg-name\" name \"--dev-pkg\" \"%{dev}%\"]\ndev-repo: \"git+https://erratique.ch/repos/topkg.git\"\nurl {\n  src: \"https://erratique.ch/software/topkg/releases/topkg-1.1.1.tbz\"\n  checksum:\n    \"sha512=c36c549a362ddf5b7fe3f6ff91c79b7ab531c43633bb9737576370bcbd69db7e1625d247c278a869b503d45a175e9753231ccf595e5bfa4e3b7e2602ac3d3b42\"\n}\nx-maintenance-intent: [\"(latest)\"]"
     }
   ],
   "downloads": [
@@ -230,7 +234,8 @@
         "url": "https://github.com/mirage/ocaml-base64.git",
         "rev": "45ee98e51deb980d8278ca8ed4643b692fbdab69",
         "submodules": true,
-        "leaveDotGit": false
+        "leaveDotGit": false,
+        "commitObject": null
       },
       "hash": "sha256-WNRKJPcr6TmOol3/FDIZ0HviRXYqkKRCwXAYc2UiA8s="
     },
@@ -240,5 +245,6 @@
       "mirrors": [],
       "hash": "sha256-v6TL/vDlheQRPzLAzMcN+djaOuRcqR6kpQ4rnKC0QJQ="
     }
-  ]
+  ],
+  "lockHash": "sha256:bce215a5a8eb5b85522554d22c0061ef943e31c0a611d1a5367bd9c3fb41a3c3"
 }

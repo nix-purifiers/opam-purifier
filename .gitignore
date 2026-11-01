@@ -2,3 +2,4 @@
 .opam-purifier/
 _opam/
 _build/
+__pycache__/

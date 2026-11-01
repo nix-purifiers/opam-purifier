@@ -6,8 +6,10 @@
 #   { path, url, mirrors, hash }
 #     a file, where hash is the SRI hash of the file, fetched from
 #     `[ url ] ++ mirrors`
-#   { path, git = { url, rev, submodules, leaveDotGit }, hash }
-#     a git checkout, where hash is the SRI hash nix-prefetch-git reports
+#   { path, git = { url, rev, submodules, leaveDotGit, commitObject }, hash }
+#     a git checkout, where hash is the SRI hash nix-prefetch-git reports.
+#     opam installs a pinned checkout by its files, so the lock writes
+#     leaveDotGit = false and commitObject = null.
 #   { path, hg = { url, rev }, hash }
 #     a Mercurial checkout, where hash is the SRI NAR hash
 #   { path, darcs = { url, rev, context }, hash }

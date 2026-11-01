@@ -22,6 +22,7 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -30,6 +31,9 @@ import tempfile
 import urllib.request
 
 LOCK_FILE = "opam-purifier.lock.json"
+# The package the lock run makes to solve the tools (--tool) together
+# with the project.
+TOOLS_PACKAGE = "opam-purifier-tools"
 LOCK_VERSION = 1
 STATE_DIR = ".opam-purifier"
 DEFAULT_REPOSITORY = ("default", "https://opam.ocaml.org")
@@ -353,9 +357,13 @@ def package_name(root, path):
     return path.name[: -len(".opam")]
 
 
-def project_packages(root):
+def project_packages(root, only=()):
+    """The project's packages, or the ones `only` names. A package outside
+    `only` is not locked, built or installed."""
     packages = []
     for path in project_opam_files(root):
+        if only and package_name(root, path) not in only:
+            continue
         opam = OpamFile(path.read_text())
         packages.append(
             {
@@ -365,7 +373,12 @@ def project_packages(root):
             }
         )
     if not packages:
+        if only:
+            fail(f"no opam file in {root} defines {', '.join(only)}")
         fail(f"no opam file in {root}; run opam-purifier in the project root")
+    missing = set(only) - {p["name"] for p in packages}
+    if missing:
+        fail(f"no opam file in {root} defines {', '.join(sorted(missing))}")
     return packages
 
 
@@ -386,6 +399,21 @@ def definition_hash(root, options):
         lines.append(f"{path.relative_to(root)}\t{hashlib.sha256(path.read_bytes()).hexdigest()}\n")
     lines.append("options\t" + json.dumps(options, sort_keys=True, separators=(",", ":")) + "\n")
     return "sha256:" + hashlib.sha256("".join(lines).encode()).hexdigest()
+
+
+def lock_hash(lock_data):
+    """The hash a lockfile carries of its own content: the SHA-256 of the
+    lockfile without `lockHash`, as compact JSON with sorted keys and
+    UTF-8 text. builtins.toJSON writes the same text, so nix/lib/lock.nix
+    notices a lockfile edited by hand."""
+    content = {k: v for k, v in lock_data.items() if k != "lockHash"}
+    text = json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def write_lock(root, lock_data):
+    lock_data["lockHash"] = lock_hash(lock_data)
+    (root / LOCK_FILE).write_text(json.dumps(lock_data, indent=2, ensure_ascii=False) + "\n")
 
 
 def read_lock(root):
@@ -442,23 +470,76 @@ class LockRun:
             args.append("--locked")
         return args
 
+    def repository_source(self, repo):
+        """Where opam reads a repository from. A URL `archive+<url>` names an
+        archive of the repository, such as opam-repository at a commit on
+        GitHub; the lock run unpacks it and gives opam the directory, so a
+        relock reads the same repository state."""
+        url = repo["url"]
+        if not url.startswith("archive+"):
+            return url
+        archive = self.download(url[len("archive+") :])
+        target = self.work / "repositories" / repo["name"]
+        target.mkdir(parents=True)
+        with tarfile.open(archive) as tar:
+            members = tar.getmembers()
+            tops = {m.name.split("/", 1)[0] for m in members}
+            strip = len(tops) == 1
+            for member in members:
+                if strip:
+                    if "/" not in member.name:
+                        continue
+                    member.name = member.name.split("/", 1)[1]
+                if not member.name or member.issym() or member.islnk():
+                    continue
+                tar.extract(member, target, filter="data")
+        if not (target / "repo").is_file():
+            fail(f"{url}: the archive holds no opam repository (no `repo` file at its top)")
+        return str(target)
+
     def init(self):
         repositories = self.options["repositories"]
         first = repositories[0]
-        self.opam("init", "--bare", "--disable-sandboxing", "--no-setup", first["name"], first["url"])
+        self.opam(
+            "init", "--bare", "--disable-sandboxing", "--no-setup", first["name"], self.repository_source(first)
+        )
         for repo in repositories[1:]:
-            self.opam("repository", "add", repo["name"], repo["url"], "--all-switches", "--set-default")
+            self.opam(
+                "repository", "add", repo["name"], self.repository_source(repo), "--all-switches", "--set-default"
+            )
+        # The tools the lock holds for the interactive mode (--tool) take part
+        # in the solution through a package that depends on them, so their
+        # versions agree with the versions the project gets.
+        self.tools_dir = None
+        if self.options["tools"]:
+            self.tools_dir = self.work / "tools"
+            self.tools_dir.mkdir()
+            depends = " ".join(f'"{t}"' for t in self.options["tools"])
+            (self.tools_dir / f"{TOOLS_PACKAGE}.opam").write_text(
+                f'opam-version: "2.0"\nname: "{TOOLS_PACKAGE}"\nversion: "1"\ndepends: [ {depends} ]\n'
+            )
         switch = self.work / "switch"
         switch.mkdir()
         self.opam("switch", "create", str(switch), "--empty")
         self.env["OPAMSWITCH"] = str(switch)
 
     def solve(self, system, local_names):
-        """The packages opam installs for the project on a system, as
-        name.version strings. Their archives land in the download cache."""
-        solution_file = self.work / f"solution-{system}.json"
-        args = ["install", "--deps-only", *self.install_args(), "./"]
+        """The packages opam installs for the project and its tools on a
+        system, as name.version strings, and the ones of them only the tools
+        need. Their archives land in the download cache."""
+        tools = [str(self.tools_dir / f"{TOOLS_PACKAGE}.opam")] if self.tools_dir else []
+        args = ["install", "--deps-only", *self.install_args(), *self.targets, *tools]
         self.opam(*args, "--download-only", system=system)
+        joint = self.dry_run(args, system, local_names, "joint")
+        if not self.tools_dir:
+            return joint, []
+        project_args = ["install", "--deps-only", *self.install_args(), *self.targets]
+        project_names = {p.partition(".")[0] for p in self.dry_run(project_args, system, local_names, "project")}
+        tools_only = [p for p in joint if p.partition(".")[0] not in project_names]
+        return [p for p in joint if p not in tools_only], tools_only
+
+    def dry_run(self, args, system, local_names, label):
+        solution_file = self.work / f"solution-{system}-{label}.json"
         self.opam(*args, "--dry-run", f"--json={solution_file}", system=system)
         solution = json.loads(solution_file.read_text())
         packages = []
@@ -480,7 +561,9 @@ class LockRun:
             {
                 f"{p['name']}.{p['version']}"
                 for p in packages
-                if p["name"] not in local_names and not p["name"].startswith("deps-of-")
+                if p["name"] not in local_names
+                and p["name"] != TOOLS_PACKAGE
+                and not p["name"].startswith("deps-of-")
             }
         )
 
@@ -573,7 +656,15 @@ class LockRun:
             )
             return {
                 "path": path,
-                "git": {"url": fetch_url, "rev": rev, "submodules": True, "leaveDotGit": False},
+                # opam installs a pinned checkout by its files, so the
+                # entry needs no .git and no commit object.
+                "git": {
+                    "url": fetch_url,
+                    "rev": rev,
+                    "submodules": True,
+                    "leaveDotGit": False,
+                    "commitObject": None,
+                },
                 "hash": json.loads(out)["hash"],
             }
         if kind == "hg":
@@ -684,8 +775,22 @@ def lock(root, args, force):
         repositories = previous["options"]["repositories"]
     else:
         repositories = [{"name": DEFAULT_REPOSITORY[0], "url": DEFAULT_REPOSITORY[1]}]
+    if args.tool is not None:
+        tools = sorted(set(args.tool))
+    elif previous:
+        tools = previous["options"].get("tools", [])
+    else:
+        tools = []
+    if args.only is not None:
+        only = sorted(set(args.only))
+    elif previous:
+        only = previous["options"].get("only", [])
+    else:
+        only = []
     options = {
         "repositories": repositories,
+        "only": only,
+        "tools": tools,
         "withTest": not args.without_test,
         "withDoc": args.with_doc,
         "locked": any(root.glob("*.opam.locked")),
@@ -700,21 +805,24 @@ def lock(root, args, force):
         print(f"opam-purifier: {LOCK_FILE} is up to date")
         return
 
-    packages = project_packages(root)
+    packages = project_packages(root, options["only"])
     local_names = [p["name"] for p in packages]
     with tempfile.TemporaryDirectory(prefix="opam-purifier-") as tmp:
         lockrun = LockRun(root, options, pathlib.Path(tmp))
+        # opam installs the project's packages by their opam files, so a lock
+        # with --only leaves the others out.
+        lockrun.targets = ["./" + p["opamFile"] for p in packages]
         lockrun.init()
 
         systems = {}
         for system in SYSTEMS:
             print(f"opam-purifier: solving for {system}", file=sys.stderr)
-            installs = lockrun.solve(system, local_names)
+            installs, tools = lockrun.solve(system, local_names)
             depexts = set()
-            for package in installs:
+            for package in installs + tools:
                 depexts.update(d.strip('"') for d in lockrun.package_field(package, "depexts", system=system).split())
-            systems[system] = {"install": installs, "depexts": sorted(depexts)}
-        all_packages = sorted({p for s in systems.values() for p in s["install"]})
+            systems[system] = {"install": installs, "tools": tools, "depexts": sorted(depexts)}
+        all_packages = sorted({p for s in systems.values() for p in s["install"] + s["tools"]})
 
         downloads = {}
         pins = resolve_pins(root, lockrun, packages, downloads)
@@ -750,12 +858,12 @@ def lock(root, args, force):
         "repository": repository,
         "downloads": [downloads[k] for k in sorted(downloads)],
     }
-    (root / LOCK_FILE).write_text(json.dumps(lock_data, indent=2) + "\n")
+    write_lock(root, lock_data)
     print("opam-purifier: building the project in the Nix sandbox to record its outputs", file=sys.stderr)
     outputs = build_outputs(root, local_names)
     for p in packages:
         p["files"] = outputs.get(p["name"], [])
-    (root / LOCK_FILE).write_text(json.dumps(lock_data, indent=2) + "\n")
+    write_lock(root, lock_data)
     print(f"opam-purifier: wrote {LOCK_FILE} with {len(all_packages)} packages")
 
 
@@ -816,6 +924,20 @@ def realize(root):
     return link.resolve()
 
 
+def in_shell(root, cmd):
+    """The command, run inside nix/lib/shell.nix: the tools of the
+    sandboxed build and the system packages of the lock's depexts."""
+    lib, nixpkgs = library()
+    return [
+        "nix-shell",
+        f"{lib}/shell.nix",
+        "--arg", "lockFile", str(root / LOCK_FILE),
+        "--argstr", "system", current_system(),
+        "--arg", "nixpkgs", nixpkgs,
+        "--run", shlex.join(cmd),
+    ]
+
+
 def offline_env(root, state_path):
     env = dict(os.environ)
     env.update(
@@ -838,7 +960,9 @@ def install(root):
     if lock_data is None:
         fail(f"no {LOCK_FILE}; run `opam-purifier lock` first")
     if definition_hash(root, current_options(root, lock_data)) != lock_data["definitionHash"]:
-        fail(f"{LOCK_FILE} is out of date with the opam files; run `opam-purifier lock`")
+        fail(f"the opam files changed since {LOCK_FILE} was written; run `opam-purifier lock`")
+    if lock_data.get("lockHash") != lock_hash(lock_data):
+        fail(f"{LOCK_FILE} was changed after `opam-purifier lock` wrote it; run `opam-purifier relock`")
     state = realize(root)
     env = offline_env(root, state)
     # The root is made afresh from the lock each time, so it holds the
@@ -848,17 +972,35 @@ def install(root):
         shutil.rmtree(opam_root)
     if (root / "_opam").exists():
         shutil.rmtree(root / "_opam")
-    run(["bash", f"{state}/bin/install-dependencies", str(root)], env=env, cwd=root)
+    run(
+        in_shell(root, ["bash", f"{state}/bin/install-dependencies", str(root), str(root), "--with-tools"]),
+        env=env,
+        cwd=root,
+    )
     print("opam-purifier: _opam holds the locked dependencies; run `opam-purifier opam exec -- dune build`")
 
 
 def opam_command(root, argv):
-    if read_lock(root) is None:
+    lock_data = read_lock(root)
+    if lock_data is None:
         fail(f"no {LOCK_FILE}; run `opam-purifier lock` first")
-    if not (root / STATE_DIR / "root").is_dir():
-        fail("no purifier root; run `opam-purifier install` first")
+    if definition_hash(root, current_options(root, lock_data)) != lock_data["definitionHash"]:
+        fail(
+            f"the opam files changed since {LOCK_FILE} was written; run `opam-purifier lock`, "
+            "then `opam-purifier install`"
+        )
+    if not (root / STATE_DIR / "root").is_dir() or not (root / "_opam").is_dir():
+        fail("no local switch; run `opam-purifier install` first")
     env = offline_env(root, (root / STATE_DIR / "gcroot").resolve())
-    os.execvpe("opam", ["opam", *argv], env)
+    result = subprocess.run(in_shell(root, ["opam", *argv]), env=env, cwd=root, check=False)
+    if result.returncode != 0 and argv and argv[0] in ("install", "upgrade", "reinstall"):
+        print(
+            "opam-purifier: opam runs offline here, from the packages the lockfile holds. To add a "
+            "dependency, add it to the opam file and run `opam-purifier lock`, then "
+            "`opam-purifier install`; for an editor or other tool, run `opam-purifier lock --tool PACKAGE`.",
+            file=sys.stderr,
+        )
+    sys.exit(result.returncode)
 
 
 # ---------------------------------------------------------------------------
@@ -937,7 +1079,21 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("lock", "relock"):
         p = sub.add_parser(name)
-        p.add_argument("--repo", action="append", help="NAME=URL of a repository to resolve from")
+        p.add_argument(
+            "--repo",
+            action="append",
+            help="NAME=URL of a repository to resolve from; archive+URL names an archive of one",
+        )
+        p.add_argument(
+            "--only",
+            action="append",
+            help="a package of the project to lock; the default is every package with an opam file",
+        )
+        p.add_argument(
+            "--tool",
+            action="append",
+            help="a package to lock for the interactive mode only, such as ocaml-lsp-server",
+        )
         p.add_argument("--without-test", action="store_true", help="leave out test dependencies")
         p.add_argument("--with-doc", action="store_true", help="lock documentation dependencies too")
     sub.add_parser("install")
