@@ -235,7 +235,10 @@ Limits:
   `parser-agrees` check compares the two parsers on every opam file of the
   fixtures and of ocaml-uri.
 
-## 7. Real-world projects
+## 7. Examples
+
+CI locks and builds the projects below. They are examples of opam-purifier
+at work, not a list of the projects it has been tried on or works with.
 
 | Project | Pinned at | What runs |
 |---|---|---|
