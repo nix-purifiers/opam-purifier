@@ -1,0 +1,215 @@
+{
+  "version": 1,
+  "opam": "2.6.1",
+  "definitionHash": "sha256:79ae3cdfc5d84cbfeaf42f6a60edb480b7f4326342176f6acdeeb8c45c2f2673",
+  "options": {
+    "repositories": [
+      {
+        "name": "default",
+        "url": "https://opam.ocaml.org"
+      }
+    ],
+    "withTest": true,
+    "withDoc": false,
+    "locked": false
+  },
+  "packages": [
+    {
+      "name": "hello",
+      "version": "0.1.0",
+      "opamFile": "hello.opam",
+      "files": [
+        "bin/hello",
+        "lib/hello/META",
+        "lib/hello/dune-package",
+        "lib/hello/greeting/greeting.a",
+        "lib/hello/greeting/greeting.cma",
+        "lib/hello/greeting/greeting.cmi",
+        "lib/hello/greeting/greeting.cmt",
+        "lib/hello/greeting/greeting.cmx",
+        "lib/hello/greeting/greeting.cmxa",
+        "lib/hello/greeting/greeting.cmxs",
+        "lib/hello/greeting/greeting.ml",
+        "lib/hello/opam"
+      ]
+    }
+  ],
+  "systems": {
+    "x86_64-linux": {
+      "install": [
+        "base-bigarray.base",
+        "base-domains.base",
+        "base-nnp.base",
+        "base-threads.base",
+        "base-unix.base",
+        "dune.3.24.2",
+        "fmt.0.11.0",
+        "ocaml-base-compiler.5.2.1",
+        "ocaml-config.3",
+        "ocaml-options-vanilla.1",
+        "ocaml.5.2.1",
+        "ocamlbuild.0.16.1",
+        "ocamlfind.1.9.8",
+        "topkg.1.1.1"
+      ],
+      "depexts": []
+    },
+    "aarch64-linux": {
+      "install": [
+        "base-bigarray.base",
+        "base-domains.base",
+        "base-nnp.base",
+        "base-threads.base",
+        "base-unix.base",
+        "dune.3.24.2",
+        "fmt.0.11.0",
+        "ocaml-base-compiler.5.2.1",
+        "ocaml-config.3",
+        "ocaml-options-vanilla.1",
+        "ocaml.5.2.1",
+        "ocamlbuild.0.16.1",
+        "ocamlfind.1.9.8",
+        "topkg.1.1.1"
+      ],
+      "depexts": []
+    }
+  },
+  "pins": [],
+  "repository": [
+    {
+      "path": "packages/base-bigarray/base-bigarray.base/opam",
+      "contents": "opam-version: \"2.0\"\nmaintainer: \"https://github.com/ocaml/opam-repository/issues\"\ndescription: \"\"\"\nBigarray library distributed with the OCaml compiler\n\"\"\"\n\n"
+    },
+    {
+      "path": "packages/base-domains/base-domains.base/opam",
+      "contents": "opam-version: \"2.0\"\nmaintainer: \"https://github.com/ocaml-multicore/multicore-opam/issues\"\ndescription: \"\"\"\nDomains-based parallelism distributed with the Multicore OCaml compiler\"\n\"\"\"\ndepends: [\n  \"ocaml\" {>= \"5.0\"} |\n  \"ocaml-variants\" {\n    = \"4.14.0+domains\" |\n    = \"4.12.0+domains+effects\" |\n    = \"4.12.0+domains\" |\n    = \"4.10.0+multicore\" |\n    = \"4.10.0+multicore+no-effect-syntax\" |\n    = \"4.06.1+multicore\"\n  }\n]\n"
+    },
+    {
+      "path": "packages/base-nnp/base-nnp.base/opam",
+      "contents": "opam-version: \"2.0\"\nmaintainer: \"https://github.com/ocaml/opam-repository/issues\"\nsynopsis: \"Naked pointers prohibited in the OCaml heap\"\ndescription: \"\"\"\nInstalled when the compiler does not permit naked pointers in\nthe heap. Prior to OCaml 5.00.0, this mode was expressly selected\nby configuring with --disable-naked-pointers. The shared memory\nparallelism added in OCaml 5.00.0 requires this mode.\n\"\"\"\ndepends: \"base-domains\" | \"ocaml-option-nnp\" | \"ocaml-variants\" {= \"4.06.1+no-naked-pointers+flambda\"}\n"
+    },
+    {
+      "path": "packages/base-threads/base-threads.base/opam",
+      "contents": "opam-version: \"2.0\"\nmaintainer: \"https://github.com/ocaml/opam-repository/issues\"\ndescription: \"\"\"\nThreads library distributed with the OCaml compiler\n\"\"\"\n\n"
+    },
+    {
+      "path": "packages/base-unix/base-unix.base/opam",
+      "contents": "opam-version: \"2.0\"\nmaintainer: \"https://github.com/ocaml/opam-repository/issues\"\ndescription: \"\"\"\nUnix library distributed with the OCaml compiler\n\"\"\"\n\n"
+    },
+    {
+      "path": "packages/dune/dune.3.24.2/opam",
+      "contents": "opam-version: \"2.0\"\nsynopsis: \"Fast, portable, and opinionated build system\"\ndescription: \"\"\"\n\nDune is a build system that was designed to simplify the release of\nJane Street packages. It reads metadata from \"dune\" files following a\nvery simple s-expression syntax.\n\nDune is fast, has very low-overhead, and supports parallel builds on\nall platforms. It has no system dependencies; all you need to build\ndune or packages using dune is OCaml. You don't need make or bash\nas long as the packages themselves don't use bash explicitly.\n\nDune is composable; supporting multi-package development by simply\ndropping multiple repositories into the same directory.\n\nDune also supports multi-context builds, such as building against\nseveral opam roots/switches simultaneously. This helps maintaining\npackages across several versions of OCaml and gives cross-compilation\nfor free.\n\"\"\"\nmaintainer: [\"Jane Street Group, LLC <opensource@janestreet.com>\"]\nauthors: [\"Jane Street Group, LLC <opensource@janestreet.com>\"]\nlicense: \"MIT\"\nhomepage: \"https://github.com/ocaml/dune\"\ndoc: \"https://dune.readthedocs.io/\"\nbug-reports: \"https://github.com/ocaml/dune/issues\"\nconflicts: [\n  \"merlin\" {< \"3.4.0\"}\n  \"ocaml-lsp-server\" {< \"1.3.0\"}\n  \"dune-configurator\" {< \"2.3.0\"}\n  \"odoc\" {< \"2.0.1\"}\n  \"dune-release\" {< \"2.0.0\"}\n  \"js_of_ocaml-compiler\" {< \"3.6.0\"}\n  \"jbuilder\" {= \"transition\"}\n]\ndev-repo: \"git+https://github.com/ocaml/dune.git\"\nx-maintenance-intent: [\"(latest)\"]\nbuild: [\n  [\"ocaml\" \"boot/bootstrap.ml\" \"-j\" jobs]\n  [\"./_boot/dune.exe\" \"build\" \"dune.install\" \"--release\" \"--profile\" \"dune-bootstrap\" \"-j\" jobs]\n]\ndepends: [\n  # Please keep the lower bound in sync with .github/workflows/workflow.yml,\n  # dune-project and min_ocaml_version in bootstrap.ml\n  (\"ocaml\" {>= \"4.14\"} | (\"ocaml\" {>= \"4.02\" & < \"4.14~~\"} & \"ocamlfind-secondary\" & \"ocaml-secondary-compiler\" {>= \"4.14\"}))\n  \"base-unix\"\n  \"base-threads\"\n  \"lwt\" { with-dev-setup & os != \"win32\" }\n  \"cinaps\" { with-dev-setup }\n  \"csexp\" { with-dev-setup & >= \"1.3.0\" }\n  \"js_of_ocaml\" { with-dev-setup & >= \"6.1.0\" & < \"6.4\" & os != \"win32\" }\n  \"js_of_ocaml-compiler\" { with-dev-setup & >= \"6.1.0\" & < \"6.4\" & os != \"win32\" }\n  \"mdx\" { with-dev-setup & >= \"2.3.0\" & os != \"win32\" }\n  \"menhir\" { with-dev-setup & os != \"win32\" }\n  \"ocamlfind\" { with-dev-setup & os != \"win32\" }\n  \"odoc\" { with-dev-setup & >= \"3.2.0\" & os != \"win32\" }\n  \"ppx_expect\" { with-dev-setup & >= \"v0.17\" & os != \"win32\" }\n  \"ppx_optcomp\" {with-dev-setup}\n  \"spawn\" { with-dev-setup }\n  \"ppx_inline_test\" { with-dev-setup & os != \"win32\" }\n  \"ppxlib\" { with-dev-setup & >= \"0.37.0\" & os != \"win32\" }\n  \"ctypes\" { with-dev-setup & os != \"win32\" }\n  \"utop\" { with-dev-setup & >= \"2.6.0\" & os != \"win32\" }\n  \"melange\" { with-dev-setup & >= \"5.1.0-51\" & < \"7.0\" & os != \"win32\" }\n  \"uutf\" { with-dev-setup }\n  # the rev store negotiation test launches a git daemon, needs it to be\n  # installed on some distributions\n  \"conf-git-daemon\" { with-test }\n]\nurl {\n  src:\n    \"https://github.com/ocaml/dune/releases/download/3.24.2/dune-3.24.2.tbz\"\n  checksum: [\n    \"sha256=472798691b0216daf538709f0f4703b3617ef24ad0866c9096068baaba4d762a\"\n    \"sha512=13082a66a28e940d4b3c9f78b556f6c1455987cd522355ba4502e01e60a3d002d3101b51284726ae21aa87494efa2dc54d016173f05b616bbc5dad714d5714a3\"\n  ]\n}\nx-commit-hash: \"ce734ac25ffb06994a4530426bb06ee8cda19e50\"\n"
+    },
+    {
+      "path": "packages/fmt/fmt.0.11.0/opam",
+      "contents": "opam-version: \"2.0\"\nsynopsis: \"OCaml Format pretty-printer combinators\"\ndescription: \"\"\"\\\nFmt exposes combinators to devise `Format` pretty-printing functions.\n\nFmt depends only on the OCaml standard library. The optional `Fmt_tty`\nlibrary that allows to setup formatters for terminal color output\ndepends on the Unix library. The optional `Fmt_cli` library that\nprovides command line support for Fmt depends on [`cmdliner`].\n\nFmt is distributed under the ISC license.\n\nHome page: <http://erratique.ch/software/fmt>\n\n[`cmdliner`]: http://erratique.ch/software/cmdliner\"\"\"\nmaintainer: \"Daniel B\u00fcnzli <daniel.buenzl i@erratique.ch>\"\nauthors: \"The fmt programmers\"\nlicense: \"ISC\"\ntags: [\"string\" \"format\" \"pretty-print\" \"org:erratique\"]\nhomepage: \"https://erratique.ch/software/fmt\"\ndoc: \"https://erratique.ch/software/fmt/doc/\"\nbug-reports: \"https://github.com/dbuenzli/fmt/issues\"\ndepends: [\n  \"ocaml\" {>= \"4.08.0\"}\n  \"ocamlfind\" {build}\n  \"ocamlbuild\" {build}\n  \"topkg\" {build & >= \"1.1.0\"}\n]\ndepopts: [\"base-unix\" \"cmdliner\"]\nconflicts: [\n  \"cmdliner\" {< \"1.3.0\"}\n]\nbuild: [\n  \"ocaml\"\n  \"pkg/pkg.ml\"\n  \"build\"\n  \"--dev-pkg\"\n  \"%{dev}%\"\n  \"--with-base-unix\"\n  \"%{base-unix:installed}%\"\n  \"--with-cmdliner\"\n  \"%{cmdliner:installed}%\"\n]\ndev-repo: \"git+https://erratique.ch/repos/fmt.git\"\nurl {\n  src: \"https://erratique.ch/software/fmt/releases/fmt-0.11.0.tbz\"\n  checksum:\n    \"sha512=3f40155fc6a7315202e410585964307d63416c8001fd243667ed9d8d1a02b67deecacb25e9c2feb409c537bbdfb7817d91168de4ddd643532ff51d6c1c696a4a\"\n}\nx-maintenance-intent: [\"(latest)\"]"
+    },
+    {
+      "path": "packages/ocaml-base-compiler/ocaml-base-compiler.5.2.1/opam",
+      "contents": "opam-version: \"2.0\"\n# These packages are part of the infrastructure for maintaining the OCaml\n# compiler dependencies in opam. It's not possible to version the metadata\n# itself, because opam's versioning provides no mechanism to ignore the\n# revision (i.e. we don't have a way to have two revisions of ocaml.5.4.1 but\n# where \"ocaml\" {= \"5.4.1\"} would always mean to use the latest revision).\n# It is however useful to know which version of the metadata is installed.\n# This number should be bumped whenever a pertinent change is made.\nx-revision: \"5\"\nsynopsis: \"Official release 5.2.1\"\nmaintainer: [\n  \"David Allsopp <dra27@dra27.uk>\"\n  \"Florian Angeletti <florian.angeletti@inria.fr>\"\n]\nlicense: \"LGPL-2.1-or-later WITH OCaml-LGPL-linking-exception\"\nauthors: \"Xavier Leroy and many contributors\"\nhomepage: \"https://ocaml.org\"\nbug-reports: \"https://github.com/ocaml/opam-repository/issues\"\ndev-repo: \"git+https://github.com/ocaml/ocaml#5.2\"\ndepends: [\n  # This is OCaml 5.2.1\n  \"ocaml\" {= \"5.2.1\" & post}\n\n  # General base- packages\n  \"base-unix\" {post}\n  \"base-bigarray\" {post}\n  \"base-threads\" {post}\n  \"base-domains\" {post}\n  \"base-nnp\" {post}\n\n  # Port selection (Windows)\n  # amd64 mingw-w64 only\n  ((\"arch-x86_64\" {os = \"win32\" & arch = \"x86_64\"} &\n     \"system-mingw\") |\n  # i686 mingw-w64 only\n   (\"arch-x86_32\" {os = \"win32\"} & \"ocaml-option-bytecode-only\" &\n     \"system-mingw\") |\n  # Non-Windows systems need to install something to satisfy this formula, so\n  # repeat the base-unix dependency\n   \"base-unix\" {os != \"win32\" & post})\n\n  # OCaml with default configuration (no flambda, TSAN, etc.)\n  \"ocaml-options-vanilla\" {post}\n  \"ocaml-option-bytecode-only\" {arch != \"arm64\" & arch != \"x86_64\" & arch != \"s390x\" & arch != \"riscv64\" & arch != \"ppc64\"}\n\n  # Support Packages\n  \"flexdll\" {>= \"0.42\" & os = \"win32\"}\n]\nconflicts: [\n  \"relocatable\"\n  \"system-msvc\"\n]\nconflict-class: \"ocaml-core-compiler\"\nflags: compiler\nsetenv: CAML_LD_LIBRARY_PATH = \"%{lib}%/stublibs\"\nx-env-path-rewrite: [\n  [CAML_LD_LIBRARY_PATH (\";\" {os = \"win32\"} \":\" {os != \"win32\"}) \"target\"]\n]\nbuild: [\n  [\n    \"./configure\"\n    \"--host=x86_64-w64-mingw32\" {os-distribution = \"cygwin\" & system-mingw:installed & arch-x86_64:installed}\n    \"--host=i686-w64-mingw32\"   {os-distribution = \"cygwin\" & system-mingw:installed & arch-x86_32:installed}\n    \"--prefix=%{prefix}%\"\n    \"--docdir=%{doc}%/ocaml\"\n    \"--with-flexdll=%{flexdll:share}%\" {os = \"win32\" & flexdll:installed}\n    \"-C\"\n    \"CC=cc\" {os = \"openbsd\" | os = \"macos\"}\n    \"ASPP=cc -c\" {os = \"openbsd\" | os = \"macos\"}\n  ]\n  [make \"-j%{jobs}%\"]\n]\ninstall: [make \"install\"]\nurl {\n  src: \"https://github.com/ocaml/ocaml/releases/download/5.2.1/ocaml-5.2.1.tar.gz\"\n  checksum: \"sha256=2d0f8090951a97a2c0e5b8a11e90096c0e1791d2e471e4a67f87e3b974044cd0\"\n}\nextra-source \"ocaml-base-compiler.install\" {\n  src:\n    \"https://raw.githubusercontent.com/ocaml/ocaml/8c17fd444391392c5f9801241374d749c080c1a8/ocaml-variants.install\"\n  checksum: [\n    \"sha256=79f2a1a5044a91350a0eb6ce12e261a72a2855c094c425cddf3860e58c486678\"\n    \"md5=3e969b841df1f51ca448e6e6295cb451\"\n  ]\n}\n"
+    },
+    {
+      "path": "packages/ocaml-config/ocaml-config.3/opam",
+      "contents": "opam-version: \"2.0\"\nsynopsis: \"OCaml Switch Configuration\"\ndescription: \"\"\"\nThis package is used by the OCaml package to set-up its variables.\"\"\"\nmaintainer: \"David Allsopp <david@tarides.com>\"\nauthors: [\n  \"Louis Gesbert <louis.gesbert@ocamlpro.com>\"\n  \"David Allsopp <david.allsopp@metastack.com>\"\n]\nlicense: \"ISC\"\nhomepage: \"https://opam.ocaml.org/\"\nbug-reports: \"https://github.com/ocaml/opam/issues\"\ndepends: [\n  \"ocaml-base-compiler\" {>= \"5.0.0~\" | os = \"win32\"} |\n  \"ocaml-variants\" {>= \"5.0.0~\" | os = \"win32\"} |\n  \"ocaml-system\" {>= \"5.0.0~\" | os = \"win32\"} |\n  \"dkml-base-compiler\" {>= \"4.12.0~\"}\n]\nsubsts: \"gen_ocaml_config.ml\"\nextra-source \"ocaml-config.install\" {\n  src:\n    \"https://raw.githubusercontent.com/ocaml/ocaml/363fb9f5a2fb87dbd5f8cc579af87dd04e14343b/tools/opam/ocaml-config.install\"\n  checksum: [\n    \"sha256=6e4fd93f4cce6bad0ed3c08afd0248dbe7d7817109281de6294e5b5ef5597051\"\n    \"md5=8e50c5e2517d3463b3aad649748cafd7\"\n  ]\n}\nextra-source \"gen_ocaml_config.ml.in\" {\n  src:\n    \"https://raw.githubusercontent.com/ocaml/ocaml/66f33f6e08857f3c3cb53fc1759fbad6860c59bd/tools/opam/gen_ocaml_config.ml.in\"\n  checksum: [\n    \"sha256=a9ad8d84a08961159653a978db92d10f694510182b206cacb96d5c9f63b5121e\"\n    \"md5=c0a50fb1f6ffe7a48bf8600e83ae6d38\"\n  ]\n}\n"
+    },
+    {
+      "path": "packages/ocaml-options-vanilla/ocaml-options-vanilla.1/opam",
+      "contents": "opam-version: \"2.0\"\nsynopsis: \"Ensure that OCaml is compiled with no special options enabled\"\nauthors: [\n  \"David Allsopp\"\n  \"Louis Gesbert\"\n]\nhomepage: \"https://opam.ocaml.org\"\nbug-reports: \"https://github.com/ocaml/opam-repository/issues\"\nlicense: \"CC0-1.0+\"\ndepends: [\n  \"ocaml-base-compiler\" {post} |\n  \"ocaml-system\" {post} |\n  \"ocaml-variants\" {post & >= \"4.12.0~\"}\n]\nconflicts: [\n  \"ocaml-option-32bit\"\n  \"ocaml-option-afl\"\n  # See equivalent constraint in ocaml-option-bytecode-only\n  # Windows is permitted to install 32-bit versions of ocaml-base-compiler on\n  # 64-bit systems hence the (temporary) addition of the `os = \"win32\"` here,\n  # at least until the ocaml-option- / base- mess is fixed. Note that this puts\n  # 64-bit Windows into the same class as ppc64, riscv64 and s390x where\n  # ocaml-option-bytecode-only can be installed, but has no effect.\n  \"ocaml-option-bytecode-only\" {arch = \"arm64\" | (arch = \"x86_64\" & os != \"win32\") }\n  \"ocaml-option-default-unsafe-string\"\n  \"ocaml-option-flambda\"\n  \"ocaml-option-fp\"\n  \"ocaml-option-musl\"\n  \"ocaml-option-no-flat-float-array\"\n  # See constraint in ocaml-option-no-compression\n  \"ocaml-option-no-compression\" {os != \"win32\"}\n  \"ocaml-option-spacetime\"\n  \"ocaml-option-static\"\n  \"ocaml-option-nnp\"\n  \"ocaml-option-nnpchecker\"\n  \"ocaml-option-address-sanitizer\"\n  \"ocaml-option-leak-sanitizer\"\n  \"ocaml-option-tsan\"\n  \"ocaml-option-mingw\"\n]\nmaintainer: \"David Allsopp <david@tarides.com>\"\nflags: compiler\n"
+    },
+    {
+      "path": "packages/ocaml/ocaml.5.2.1/opam",
+      "contents": "opam-version: \"2.0\"\n# These packages are part of the infrastructure for maintaining the OCaml\n# compiler dependencies in opam. It's not possible to version the metadata\n# itself, because opam's versioning provides no mechanism to ignore the\n# revision (i.e. we don't have a way to have two revisions of ocaml.5.4.1 but\n# where \"ocaml\" {= \"5.4.1\"} would always mean to use the latest revision).\n# It is however useful to know which version of the metadata is installed.\n# This number should be bumped whenever a pertinent change is made.\nx-revision: \"4\"\nlicense: \"LGPL-2.1-or-later WITH OCaml-LGPL-linking-exception\"\nsynopsis: \"The OCaml compiler (virtual package)\"\ndescription: \"\"\"\nThis package requires a matching implementation of OCaml,\nand polls it to initialise specific variables like `ocaml:native-dynlink`\"\"\"\nmaintainer: \"David Allsopp <dra27@dra27.uk>\"\ndepends: [\n  \"ocaml-config\" {>= \"3\"}\n  \"ocaml-base-compiler\" {>= \"5.2.1~\" & < \"5.2.2~\" } |\n  \"ocaml-variants\" {>= \"5.2.1~\" & < \"5.2.2~\"} |\n  \"ocaml-system\" {>= \"5.2.1~\" & < \"5.2.2~\"} |\n  \"dkml-base-compiler\" {>= \"5.2.1~\" & < \"5.2.2~\"}\n  (\"ocaml-env-mingw64\" {os = \"win32\"} | \"ocaml-env-mingw32\" {os = \"win32\"})\n]\nsetenv: [\n  [OCAMLTOP_INCLUDE_PATH += \"%{toplevel}%\"]\n  [CAML_LD_LIBRARY_PATH = \"%{_:stubsdir}%\"]\n  [CAML_LD_LIBRARY_PATH += \"%{lib}%/stublibs\"]\n  # Legacy opam variable\n  [OCAML_TOPLEVEL_PATH = \"%{toplevel}%\"]\n]\nx-env-path-rewrite: [\n  [CAML_LD_LIBRARY_PATH (\";\" {os = \"win32\"} \":\" {os != \"win32\"}) \"target\"]\n  [OCAMLTOP_INCLUDE_PATH (\";\" {os = \"win32\"} \":\" {os != \"win32\"}) \"target\"]\n]\nbuild: [\"ocaml\" \"%{ocaml-config:share}%/gen_ocaml_config.ml\" _:version _:name]\nbuild-env: [\n  [CAML_LD_LIBRARY_PATH = \"\"]\n  [LSAN_OPTIONS = \"detect_leaks=0,exitcode=0\"]\n  [ASAN_OPTIONS = \"detect_leaks=0,exitcode=0\"]\n]\nhomepage: \"https://ocaml.org\"\nbug-reports: \"https://github.com/ocaml/opam-repository/issues\"\nauthors: [\n  \"Xavier Leroy\"\n  \"Damien Doligez\"\n  \"Alain Frisch\"\n  \"Jacques Garrigue\"\n  \"Didier R\u00e9my\"\n  \"KC Sivaramakrishnan\"\n  \"J\u00e9r\u00f4me Vouillon\"\n]\nflags: conf\n"
+    },
+    {
+      "path": "packages/ocamlbuild/ocamlbuild.0.16.1/opam",
+      "contents": "opam-version: \"2.0\"\nmaintainer: \"Gabriel Scherer <gabriel.scherer@gmail.com>\"\nauthors: [\"Nicolas Pouillard\" \"Berke Durak\"]\nhomepage: \"https://github.com/ocaml/ocamlbuild/\"\nbug-reports: \"https://github.com/ocaml/ocamlbuild/issues\"\nlicense: \"LGPL-2.0-or-later WITH OCaml-LGPL-linking-exception\"\ndoc: \"https://github.com/ocaml/ocamlbuild/blob/master/manual/manual.adoc\"\ndev-repo: \"git+https://github.com/ocaml/ocamlbuild.git\"\nsynopsis:\n  \"OCamlbuild is a build system with builtin rules to easily build most OCaml projects\"\n\nbuild: [\n  [\n    make\n    \"-f\"\n    \"configure.make\"\n    \"all\"\n    \"OCAMLBUILD_PREFIX=%{prefix}%\"\n    \"OCAMLBUILD_BINDIR=%{bin}%\"\n    \"OCAMLBUILD_LIBDIR=%{lib}%\"\n    \"OCAMLBUILD_MANDIR=%{man}%\"\n    \"OCAML_NATIVE=%{ocaml:native}%\"\n    \"OCAML_NATIVE_TOOLS=%{ocaml:native}%\"\n  ]\n  [make \"check-if-preinstalled\" \"all\" \"opam-install\"]\n]\n\nconflicts: [\n  \"base-ocamlbuild\"\n  \"ocamlfind\" {< \"1.6.2\"}\n  \"relocatable\"\n]\n\ndepends: [\n  \"ocaml\" {>= \"4.08\"}\n  \"ocamlfind\" {with-test}\n  \"menhirLib\" {with-test}\n]\n\nurl {\n  src: \"https://github.com/ocaml/ocamlbuild/archive/refs/tags/0.16.1.tar.gz\"\n  checksum: [\n    \"sha512=e918b9a0081f271e507c7a4f4d5d5a7cdf818ca51c52acec1bac85ddad5f6cad078cb3c568252fbcf5401c2d75323ed8f50fdd881bda1c9632840320408393ae\"\n  ]\n}\n"
+    },
+    {
+      "path": "packages/ocamlfind/ocamlfind.1.9.8/opam",
+      "contents": "opam-version: \"2.0\"\nsynopsis: \"A library manager for OCaml\"\ndescription: \"\"\"\\\nFindlib is a library manager for OCaml. It provides a convention how\nto store libraries, and a file format (\"META\") to describe the\nproperties of libraries. There is also a tool (ocamlfind) for\ninterpreting the META files, so that it is very easy to use libraries\nin programs and scripts.\"\"\"\nmaintainer: \"Thomas Gazagnaire <thomas@gazagnaire.org>\"\nauthors: \"Gerd Stolpmann <gerd@gerd-stolpmann.de>\"\nlicense: \"MIT\"\nhomepage: \"http://projects.camlcity.org/projects/findlib.html\"\nbug-reports: \"https://github.com/ocaml/ocamlfind/issues\"\ndepends: [\n  \"ocaml\" {>= \"3.08.0\" & (os != \"cygwin\" & os-distribution != \"msys2\" | < \"5.0\") & < \"5.5.0~\"}\n]\ndepopts: [\"graphics\"]\nconflicts: [\"relocatable\"]\nbuild: [\n  [\n    \"./configure\"\n    \"-bindir\"\n    bin\n    \"-sitelib\"\n    lib\n    \"-mandir\"\n    man\n    \"-config\"\n    \"%{lib}%/findlib.conf\"\n    \"-no-custom\"\n    \"-no-camlp4\" {!ocaml:preinstalled & ocaml:version >= \"4.02.0\"}\n    \"-no-topfind\" {ocaml:preinstalled}\n  ]\n  [make \"all\"]\n  [make \"opt\"] {ocaml:native}\n]\ninstall: [\n  [make \"install\"]\n  [\"install\" \"-m\" \"0755\" \"ocaml-stub\" \"%{bin}%/ocaml\"] {ocaml:preinstalled}\n]\ndev-repo: \"git+https://github.com/ocaml/ocamlfind.git\"\nurl {\n  src:\n    \"https://github.com/ocaml/ocamlfind/archive/refs/tags/findlib-1.9.8.tar.gz\"\n  checksum: [\n    \"md5=ca770e5806032a96131b670f6e07f146\"\n    \"sha512=8967986de2ab4ec5993f437b0a4206742adf37aa7a292a3bba0a04438d78539b84d001191e60b2d5bde98a695b38cba2593b7051f7749adbdb964a0df3c4b661\"\n  ]\n}"
+    },
+    {
+      "path": "packages/topkg/topkg.1.1.1/opam",
+      "contents": "opam-version: \"2.0\"\nsynopsis: \"The transitory OCaml software packager\"\ndescription: \"\"\"\\\n**Warning** Topkg is in maintenance mode and should not longer be used.\n\nTopkg is a packager for distributing OCaml software. It provides an\nAPI to describe the files a package installs in a given build\nconfiguration and to specify information about the package's\ndistribution, creation and publication procedures.\n\nThe optional topkg-care package provides the `topkg` command line tool\nwhich helps with various aspects of a package's life cycle: creating\nand linting a distribution, releasing it on the WWW, publish its\ndocumentation, add it to the OCaml opam repository, etc.\n\nTopkg is distributed under the ISC license and has **no**\ndependencies. This is what your packages will need as a *build*\ndependency.\n\nTopkg-care is distributed under the ISC license it depends on\n[fmt][fmt], [logs][logs], [bos][bos], [cmdliner][cmdliner],\n[webbrowser][webbrowser] and `opam-format`.\n\n[fmt]: http://erratique.ch/software/fmt\n[logs]: http://erratique.ch/software/logs\n[bos]: http://erratique.ch/software/bos\n[cmdliner]: http://erratique.ch/software/cmdliner\n[webbrowser]: http://erratique.ch/software/webbrowser\n\nHome page: <http://erratique.ch/software/topkg>\"\"\"\nmaintainer: \"Daniel B\u00fcnzli <daniel.buenzl i@erratique.ch>\"\nauthors: \"The topkg programmers\"\nlicense: \"ISC\"\ntags: [\"packaging\" \"ocamlbuild\" \"org:erratique\"]\nhomepage: \"https://erratique.ch/software/topkg\"\ndoc: \"https://erratique.ch/software/topkg/doc\"\nbug-reports: \"https://github.com/dbuenzli/topkg/issues\"\ndepends: [\n  \"ocaml\" {>= \"4.08.0\"}\n  \"ocamlfind\" {build & >= \"1.6.1\"}\n  \"ocamlbuild\"\n]\nbuild: [\"ocaml\" \"pkg/pkg.ml\" \"build\" \"--pkg-name\" name \"--dev-pkg\" \"%{dev}%\"]\ndev-repo: \"git+https://erratique.ch/repos/topkg.git\"\nurl {\n  src: \"https://erratique.ch/software/topkg/releases/topkg-1.1.1.tbz\"\n  checksum:\n    \"sha512=c36c549a362ddf5b7fe3f6ff91c79b7ab531c43633bb9737576370bcbd69db7e1625d247c278a869b503d45a175e9753231ccf595e5bfa4e3b7e2602ac3d3b42\"\n}\nx-maintenance-intent: [\"(latest)\"]"
+    }
+  ],
+  "downloads": [
+    {
+      "path": "download-cache/md5/ca/ca770e5806032a96131b670f6e07f146",
+      "url": "https://github.com/ocaml/ocamlfind/archive/refs/tags/findlib-1.9.8.tar.gz",
+      "mirrors": [
+        "https://opam.ocaml.org/cache/md5/ca/ca770e5806032a96131b670f6e07f146",
+        "https://opam.ocaml.org/cache/sha512/89/8967986de2ab4ec5993f437b0a4206742adf37aa7a292a3bba0a04438d78539b84d001191e60b2d5bde98a695b38cba2593b7051f7749adbdb964a0df3c4b661"
+      ],
+      "hash": "sha256-1omZNcyr9n8Geprz8/iNlOMQB10Txkj6A/9Jh2nOA50="
+    },
+    {
+      "path": "download-cache/sha256/2d/2d0f8090951a97a2c0e5b8a11e90096c0e1791d2e471e4a67f87e3b974044cd0",
+      "url": "https://github.com/ocaml/ocaml/releases/download/5.2.1/ocaml-5.2.1.tar.gz",
+      "mirrors": [
+        "https://opam.ocaml.org/cache/sha256/2d/2d0f8090951a97a2c0e5b8a11e90096c0e1791d2e471e4a67f87e3b974044cd0"
+      ],
+      "hash": "sha256-LQ+AkJUal6LA5bihHpAJbA4XkdLkceSmf4fjuXQETNA="
+    },
+    {
+      "path": "download-cache/sha256/47/472798691b0216daf538709f0f4703b3617ef24ad0866c9096068baaba4d762a",
+      "url": "https://github.com/ocaml/dune/releases/download/3.24.2/dune-3.24.2.tbz",
+      "mirrors": [
+        "https://opam.ocaml.org/cache/sha256/47/472798691b0216daf538709f0f4703b3617ef24ad0866c9096068baaba4d762a",
+        "https://opam.ocaml.org/cache/sha512/13/13082a66a28e940d4b3c9f78b556f6c1455987cd522355ba4502e01e60a3d002d3101b51284726ae21aa87494efa2dc54d016173f05b616bbc5dad714d5714a3"
+      ],
+      "hash": "sha256-RyeYaRsCFtr1OHCfD0cDs2F+8krQhmyQlgaLqrpNdio="
+    },
+    {
+      "path": "download-cache/sha256/6e/6e4fd93f4cce6bad0ed3c08afd0248dbe7d7817109281de6294e5b5ef5597051",
+      "url": "https://raw.githubusercontent.com/ocaml/ocaml/363fb9f5a2fb87dbd5f8cc579af87dd04e14343b/tools/opam/ocaml-config.install",
+      "mirrors": [
+        "https://opam.ocaml.org/cache/sha256/6e/6e4fd93f4cce6bad0ed3c08afd0248dbe7d7817109281de6294e5b5ef5597051",
+        "https://opam.ocaml.org/cache/md5/8e/8e50c5e2517d3463b3aad649748cafd7"
+      ],
+      "hash": "sha256-bk/ZP0zOa60O08CK/QJI2+fXgXEJKB3mKU5bXvVZcFE="
+    },
+    {
+      "path": "download-cache/sha256/79/79f2a1a5044a91350a0eb6ce12e261a72a2855c094c425cddf3860e58c486678",
+      "url": "https://raw.githubusercontent.com/ocaml/ocaml/8c17fd444391392c5f9801241374d749c080c1a8/ocaml-variants.install",
+      "mirrors": [
+        "https://opam.ocaml.org/cache/sha256/79/79f2a1a5044a91350a0eb6ce12e261a72a2855c094c425cddf3860e58c486678",
+        "https://opam.ocaml.org/cache/md5/3e/3e969b841df1f51ca448e6e6295cb451"
+      ],
+      "hash": "sha256-efKhpQRKkTUKDrbOEuJhpyooVcCUxCXN3zhg5YxIZng="
+    },
+    {
+      "path": "download-cache/sha256/a9/a9ad8d84a08961159653a978db92d10f694510182b206cacb96d5c9f63b5121e",
+      "url": "https://raw.githubusercontent.com/ocaml/ocaml/66f33f6e08857f3c3cb53fc1759fbad6860c59bd/tools/opam/gen_ocaml_config.ml.in",
+      "mirrors": [
+        "https://opam.ocaml.org/cache/sha256/a9/a9ad8d84a08961159653a978db92d10f694510182b206cacb96d5c9f63b5121e",
+        "https://opam.ocaml.org/cache/md5/c0/c0a50fb1f6ffe7a48bf8600e83ae6d38"
+      ],
+      "hash": "sha256-qa2NhKCJYRWWU6l425LRD2lFEBgrIGysuW1cn2O1Eh4="
+    },
+    {
+      "path": "download-cache/sha512/3f/3f40155fc6a7315202e410585964307d63416c8001fd243667ed9d8d1a02b67deecacb25e9c2feb409c537bbdfb7817d91168de4ddd643532ff51d6c1c696a4a",
+      "url": "https://erratique.ch/software/fmt/releases/fmt-0.11.0.tbz",
+      "mirrors": [
+        "https://opam.ocaml.org/cache/sha512/3f/3f40155fc6a7315202e410585964307d63416c8001fd243667ed9d8d1a02b67deecacb25e9c2feb409c537bbdfb7817d91168de4ddd643532ff51d6c1c696a4a"
+      ],
+      "hash": "sha256-hXz9R6VLUkKc2bPiZl5EFzzRvTtDW+znFy+YStU3ahs="
+    },
+    {
+      "path": "download-cache/sha512/c3/c36c549a362ddf5b7fe3f6ff91c79b7ab531c43633bb9737576370bcbd69db7e1625d247c278a869b503d45a175e9753231ccf595e5bfa4e3b7e2602ac3d3b42",
+      "url": "https://erratique.ch/software/topkg/releases/topkg-1.1.1.tbz",
+      "mirrors": [
+        "https://opam.ocaml.org/cache/sha512/c3/c36c549a362ddf5b7fe3f6ff91c79b7ab531c43633bb9737576370bcbd69db7e1625d247c278a869b503d45a175e9753231ccf595e5bfa4e3b7e2602ac3d3b42"
+      ],
+      "hash": "sha256-INoGLcnOohtcco8iyYbtPj1XMQ5kMmAWCoAtVZcS9vw="
+    },
+    {
+      "path": "download-cache/sha512/e9/e918b9a0081f271e507c7a4f4d5d5a7cdf818ca51c52acec1bac85ddad5f6cad078cb3c568252fbcf5401c2d75323ed8f50fdd881bda1c9632840320408393ae",
+      "url": "https://github.com/ocaml/ocamlbuild/archive/refs/tags/0.16.1.tar.gz",
+      "mirrors": [
+        "https://opam.ocaml.org/cache/sha512/e9/e918b9a0081f271e507c7a4f4d5d5a7cdf818ca51c52acec1bac85ddad5f6cad078cb3c568252fbcf5401c2d75323ed8f50fdd881bda1c9632840320408393ae"
+      ],
+      "hash": "sha256-K6aFfymRt/aTaOjbgYsWPTHPWjZ/FfWVO/jwGnez1Pw="
+    }
+  ]
+}

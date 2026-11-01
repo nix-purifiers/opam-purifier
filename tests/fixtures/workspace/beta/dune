@@ -1,0 +1,5 @@
+(executable
+ (name beta)
+ (public_name beta)
+ (package beta)
+ (libraries alpha uutf))

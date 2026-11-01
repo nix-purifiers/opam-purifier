@@ -1,0 +1,959 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+#
+# opam-purifier: locks every file an opam project downloads, so that Nix
+# can build the project offline in its sandbox.
+#
+#   opam-purifier lock             lock, when the build definition changed
+#   opam-purifier relock           lock, whatever changed
+#   opam-purifier install          set up the local switch _opam offline
+#   opam-purifier opam ARGS...     run opam on the purifier's root, offline
+#   opam-purifier publish ...      build a release archive with Nix and
+#                                  submit its opam file
+#
+# The commands run in the project root, where the project's opam files
+# are. The package that installs this script sets OPAM_PURIFIER_LIB (the
+# Nix library) and OPAM_PURIFIER_NIXPKGS (the nixpkgs it builds with).
+
+import argparse
+import base64
+import hashlib
+import json
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import urllib.request
+
+LOCK_FILE = "opam-purifier.lock.json"
+LOCK_VERSION = 1
+STATE_DIR = ".opam-purifier"
+DEFAULT_REPOSITORY = ("default", "https://opam.ocaml.org")
+OPAM_CACHE = "https://opam.ocaml.org/cache"
+
+# The Nix systems a lock covers, with the value of opam's `arch` variable
+# on each.
+SYSTEMS = {
+    "x86_64-linux": "x86_64",
+    "aarch64-linux": "arm64",
+}
+
+
+def platform_env(system):
+    """opam's platform variables for a Nix system. The lock run and the
+    sandboxed build set the same values, so that the `available` fields
+    and the depexts evaluate the same way in both. NixOS is the
+    distribution whose depexts name nixpkgs attributes."""
+    return {
+        "OPAMVAR_arch": SYSTEMS[system],
+        "OPAMVAR_os": "linux",
+        "OPAMVAR_os_family": "nixos",
+        "OPAMVAR_os_distribution": "nixos",
+    }
+
+
+def fail(message):
+    print(f"opam-purifier: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def run(cmd, env=None, cwd=None, capture=False):
+    try:
+        result = subprocess.run(
+            cmd,
+            env=env,
+            cwd=cwd,
+            check=False,
+            stdout=subprocess.PIPE if capture else None,
+            text=True,
+        )
+    except FileNotFoundError:
+        fail(f"could not run {cmd[0]}; it is not on PATH")
+    if result.returncode != 0:
+        fail(f"{' '.join(cmd)} failed")
+    return result.stdout if capture else None
+
+
+def sri_sha256(data):
+    return "sha256-" + base64.b64encode(hashlib.sha256(data).digest()).decode()
+
+
+# ---------------------------------------------------------------------------
+# The opam file format, as far as the lock reads it: fields, sections, and
+# the values inside them (strings, lists, groups, options and bare tokens).
+# The grammar follows the opam-file-format library. Filters and operators
+# stay tokens, because the lock never evaluates them.
+
+TOKEN = re.compile(
+    r"""
+    (?P<ws>\s+)
+  | (?P<comment>\#[^\n]*)
+  | (?P<block>\(\*.*?\*\))
+  | (?P<triple>""\"(?:.|\n)*?""\")
+  | (?P<string>"(?:\\.|[^"\\])*")
+  | (?P<punct>[\[\]{}():])
+  | (?P<op>!=|<=|>=|\+=|=\+|:=|[=<>~&|!?+])
+  | (?P<word>[^\s\[\]{}():"#=<>~&|!?+]+)
+    """,
+    re.VERBOSE | re.DOTALL,
+)
+
+ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "b": "\b", "\\": "\\", '"': '"', "\n": ""}
+BRACKETS = {"[": ("]", "list"), "(": (")", "group"), "{": ("}", "option")}
+
+
+def unescape(body):
+    out = []
+    i = 0
+    while i < len(body):
+        c = body[i]
+        if c == "\\" and i + 1 < len(body):
+            nxt = body[i + 1]
+            if nxt in ESCAPES:
+                out.append(ESCAPES[nxt])
+                i += 2
+                if nxt == "\n":
+                    while i < len(body) and body[i] in " \t":
+                        i += 1
+                continue
+            if nxt.isdigit() and i + 3 < len(body):
+                out.append(chr(int(body[i + 1 : i + 4])))
+                i += 4
+                continue
+            if nxt == "x" and i + 3 < len(body):
+                out.append(chr(int(body[i + 2 : i + 4], 16)))
+                i += 4
+                continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def tokenize(text):
+    tokens = []
+    pos = 0
+    while pos < len(text):
+        m = TOKEN.match(text, pos)
+        if not m:
+            raise ValueError(f"cannot read opam file at offset {pos}")
+        pos = m.end()
+        kind = m.lastgroup
+        if kind in ("ws", "comment", "block"):
+            continue
+        value = m.group(kind)
+        if kind == "triple":
+            tokens.append(("str", unescape(value[3:-3])))
+        elif kind == "string":
+            tokens.append(("str", unescape(value[1:-1])))
+        elif kind == "punct":
+            tokens.append((value, value))
+        else:
+            tokens.append(("tok", value))
+    return tokens
+
+
+class OpamFile:
+    """The fields and sections of an opam file."""
+
+    def __init__(self, text):
+        self.tokens = tokenize(text)
+        self.pos = 0
+        self.fields, self.sections = self.items(top=True)
+
+    def peek(self, n=0):
+        i = self.pos + n
+        return self.tokens[i] if i < len(self.tokens) else (None, None)
+
+    def take(self):
+        tok = self.peek()
+        self.pos += 1
+        return tok
+
+    def at_item(self):
+        """Whether the next tokens start a field (`name:`) or a section
+        (`name {` or `name "label" {`)."""
+        kind, _ = self.peek()
+        if kind != "tok":
+            return False
+        k1, _ = self.peek(1)
+        if k1 in (":", "{"):
+            return True
+        k2, _ = self.peek(2)
+        return k1 == "str" and k2 == "{"
+
+    def items(self, top):
+        fields = {}
+        sections = []
+        while True:
+            kind, value = self.peek()
+            if kind is None:
+                if not top:
+                    raise ValueError("unclosed section")
+                return fields, sections
+            if kind == "}" and not top:
+                self.take()
+                return fields, sections
+            if not self.at_item():
+                raise ValueError(f"expected a field, found {value!r}")
+            _, name = self.take()
+            kind, _ = self.peek()
+            if kind == ":":
+                self.take()
+                fields[name] = self.values(stop_at_items=True)
+            else:
+                label = None
+                if kind == "str":
+                    _, label = self.take()
+                self.take()
+                sub_fields, sub_sections = self.items(top=False)
+                sections.append((name, label, sub_fields, sub_sections))
+
+    def values(self, stop_at_items=False, closer=None):
+        values = []
+        while True:
+            kind, value = self.peek()
+            if kind is None:
+                if closer:
+                    raise ValueError(f"missing {closer}")
+                return values
+            if closer and kind == closer:
+                self.take()
+                return values
+            if stop_at_items and (kind == "}" or self.at_item()):
+                return values
+            self.take()
+            if kind in BRACKETS:
+                close, label = BRACKETS[kind]
+                values.append((label, self.values(closer=close)))
+            else:
+                values.append((kind, value))
+
+    def string(self, name):
+        for kind, value in self.fields.get(name, []):
+            if kind == "str":
+                return value
+        return None
+
+
+def strings_of(values):
+    """The strings of a field value: a single string, or a list of them."""
+    out = []
+    for kind, value in values:
+        if kind == "str":
+            out.append(value)
+        elif kind == "list":
+            out.extend(strings_of(value))
+    return out
+
+
+def sources_of(text):
+    """The downloads an opam file declares, from its url section and its
+    extra-source sections."""
+    opam = OpamFile(text)
+    sources = []
+    for kind, label, fields, _ in opam.sections:
+        if kind not in ("url", "extra-source"):
+            continue
+        src = strings_of(fields.get("src", []) or fields.get("archive", []))
+        if not src:
+            continue
+        sources.append(
+            {
+                "name": label,
+                "src": src[0],
+                "checksums": strings_of(fields.get("checksum", [])),
+                "mirrors": strings_of(fields.get("mirrors", [])),
+            }
+        )
+    return sources
+
+
+def pin_depends_of(text):
+    """The pin-depends of an opam file, as (package, url) pairs."""
+    pairs = []
+
+    def walk(values):
+        strs = [v for k, v in values if k == "str"]
+        lists = [v for k, v in values if k == "list"]
+        if len(strs) == 2 and not lists:
+            pairs.append((strs[0], strs[1]))
+        for inner in lists:
+            walk(inner)
+
+    walk(OpamFile(text).fields.get("pin-depends", []))
+    return pairs
+
+
+# ---------------------------------------------------------------------------
+# URLs. An opam source URL names its transport: `git+https://...#ref`,
+# `hg+https://...`, a plain `https://...` archive, or a `file://` path.
+
+
+def vcs_of(url):
+    if url.startswith("git+") or url.startswith("git://"):
+        return "git"
+    if url.startswith("hg+"):
+        return "hg"
+    if url.startswith("darcs+"):
+        return "darcs"
+    if url.split("#", 1)[0].endswith(".git"):
+        return "git"
+    return None
+
+
+def split_vcs(url):
+    """The fetch URL and the ref of a version-control source URL."""
+    base, _, ref = url.partition("#")
+    for prefix in ("git+", "hg+", "darcs+"):
+        if base.startswith(prefix):
+            base = base[len(prefix) :]
+            break
+    # The Nix sandbox has no SSH keys, so an SSH source is fetched over
+    # HTTPS from the same host, which is the nix-purifiers convention.
+    m = re.match(r"^(?:ssh://)?git@([^:/]+)[:/](.*)$", base)
+    if m:
+        base = f"https://{m.group(1)}/{m.group(2)}"
+    return base, ref
+
+
+def cache_url(checksum):
+    kind, _, hexdigest = checksum.partition("=")
+    return f"{OPAM_CACHE}/{kind}/{hexdigest[:2]}/{hexdigest}"
+
+
+def cache_path(checksum):
+    kind, _, hexdigest = checksum.partition("=")
+    return f"download-cache/{kind}/{hexdigest[:2]}/{hexdigest}"
+
+
+# ---------------------------------------------------------------------------
+# The project.
+
+
+def project_opam_files(root):
+    """The project's own opam files, the ones `opam install ./` reads: the
+    *.opam files and a file named `opam`, in the root and in opam/."""
+    files = []
+    for directory in (root, root / "opam"):
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.iterdir()):
+            if path.is_file() and (path.suffix == ".opam" or path.name == "opam"):
+                files.append(path)
+    return files
+
+
+def package_name(root, path):
+    if path.name == "opam":
+        return OpamFile(path.read_text()).string("name") or root.name
+    return path.name[: -len(".opam")]
+
+
+def project_packages(root):
+    packages = []
+    for path in project_opam_files(root):
+        opam = OpamFile(path.read_text())
+        packages.append(
+            {
+                "name": package_name(root, path),
+                "version": opam.string("version") or "dev",
+                "opamFile": str(path.relative_to(root)),
+            }
+        )
+    if not packages:
+        fail(f"no opam file in {root}; run opam-purifier in the project root")
+    return packages
+
+
+def definition_files(root):
+    """The files that decide the lock: the project's opam files and the
+    opam lock files beside them, sorted by path."""
+    files = project_opam_files(root) + list(root.glob("*.opam.locked"))
+    return sorted(files, key=lambda p: str(p.relative_to(root)))
+
+
+def definition_hash(root, options):
+    """The hash of what decides the lock: the SHA-256 of a manifest with a
+    line `<path>\\t<sha256>` for each definition file, then the line
+    `options\\t<options as compact JSON with sorted keys>`. nix/lib/lock.nix
+    computes the same manifest, so the builder notices a stale lockfile."""
+    lines = []
+    for path in definition_files(root):
+        lines.append(f"{path.relative_to(root)}\t{hashlib.sha256(path.read_bytes()).hexdigest()}\n")
+    lines.append("options\t" + json.dumps(options, sort_keys=True, separators=(",", ":")) + "\n")
+    return "sha256:" + hashlib.sha256("".join(lines).encode()).hexdigest()
+
+
+def read_lock(root):
+    path = root / LOCK_FILE
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text())
+
+
+# ---------------------------------------------------------------------------
+# The lock run.
+
+
+class LockRun:
+    def __init__(self, root, options, work):
+        self.root = root
+        self.options = options
+        self.work = work
+        self.opam_root = work / "root"
+        self.env = dict(os.environ)
+        self.env.update(
+            {
+                "OPAMROOT": str(self.opam_root),
+                "OPAMYES": "1",
+                "OPAMNODEPEXTS": "1",
+                "OPAMCOLOR": "never",
+                "OPAMSTATUSLINE": "never",
+                "OPAMNOENVNOTICE": "1",
+                "OPAMCONFIRMLEVEL": "unsafe-yes",
+                # The wrapper of the package names itself, since the
+                # script it runs is not executable on its own.
+                "OPAMFETCH": f"{os.environ.get('OPAM_PURIFIER_SELF', sys.argv[0])} fetch %{{url}}% %{{out}}%",
+                "OPAM_PURIFIER_FETCH_LOG": str(work / "fetch.log"),
+            }
+        )
+        # The lock run starts from opam's built-in configuration, whatever
+        # the user's opam root holds.
+        for key in ("OPAMSWITCH", "OPAM_SWITCH_PREFIX"):
+            self.env.pop(key, None)
+
+    def opam(self, *args, system=None, capture=False):
+        env = dict(self.env)
+        if system:
+            env.update(platform_env(system))
+        return run(["opam", *args], env=env, cwd=self.root, capture=capture)
+
+    def install_args(self):
+        args = []
+        if self.options["withTest"]:
+            args.append("--with-test")
+        if self.options["withDoc"]:
+            args.append("--with-doc")
+        if self.options["locked"]:
+            args.append("--locked")
+        return args
+
+    def init(self):
+        repositories = self.options["repositories"]
+        first = repositories[0]
+        self.opam("init", "--bare", "--disable-sandboxing", "--no-setup", first["name"], first["url"])
+        for repo in repositories[1:]:
+            self.opam("repository", "add", repo["name"], repo["url"], "--all-switches", "--set-default")
+        switch = self.work / "switch"
+        switch.mkdir()
+        self.opam("switch", "create", str(switch), "--empty")
+        self.env["OPAMSWITCH"] = str(switch)
+
+    def solve(self, system, local_names):
+        """The packages opam installs for the project on a system, as
+        name.version strings. Their archives land in the download cache."""
+        solution_file = self.work / f"solution-{system}.json"
+        args = ["install", "--deps-only", *self.install_args(), "./"]
+        self.opam(*args, "--download-only", system=system)
+        self.opam(*args, "--dry-run", f"--json={solution_file}", system=system)
+        solution = json.loads(solution_file.read_text())
+        packages = []
+
+        def walk(node):
+            if isinstance(node, dict):
+                for key in ("install", "upgrade", "downgrade", "reinstall"):
+                    target = node.get(key)
+                    if isinstance(target, dict) and "name" in target:
+                        packages.append(target)
+                for value in node.values():
+                    walk(value)
+            elif isinstance(node, list):
+                for value in node:
+                    walk(value)
+
+        walk(solution.get("solution", []))
+        return sorted(
+            {
+                f"{p['name']}.{p['version']}"
+                for p in packages
+                if p["name"] not in local_names and not p["name"].startswith("deps-of-")
+            }
+        )
+
+    def package_field(self, package, field, system=None):
+        return self.opam("show", f"--field={field}", package, system=system, capture=True).strip()
+
+    def raw_opam(self, package):
+        return self.opam("show", "--raw", package, capture=True)
+
+    def repository_entries(self, packages, pinned):
+        """The repository files of the solved packages, as inline entries at
+        their paths in a repository."""
+        entries = {}
+        for package in packages:
+            name = package.partition(".")[0]
+            if name in pinned:
+                continue
+            repo = self.package_field(package, "repository")
+            archive = self.opam_root / "repo" / f"{repo}.tar.gz"
+            directory = self.opam_root / "repo" / repo
+            prefix = f"packages/{name}/{package}/"
+            if archive.is_file():
+                with tarfile.open(archive) as tar:
+                    for member in tar.getmembers():
+                        member_name = member.name.removeprefix("./")
+                        if member.isfile() and member_name.startswith(prefix):
+                            entries[member_name] = tar.extractfile(member).read()
+            elif directory.is_dir():
+                for path in (directory / prefix).rglob("*"):
+                    if path.is_file():
+                        entries[str(path.relative_to(directory))] = path.read_bytes()
+            else:
+                fail(f"cannot find repository {repo!r} of {package} under {self.opam_root / 'repo'}")
+        result = []
+        for path in sorted(entries):
+            try:
+                result.append({"path": path, "contents": entries[path].decode("utf-8")})
+            except UnicodeDecodeError:
+                fail(f"{path} in the repository is not UTF-8 text, and the lockfile keeps repository files as text")
+        return result
+
+    def cached_file(self, checksums):
+        for checksum in checksums:
+            path = self.opam_root / cache_path(checksum)
+            if path.is_file():
+                return path
+        return None
+
+    def download(self, url):
+        target = self.work / "downloads" / hashlib.sha256(url.encode()).hexdigest()
+        target.parent.mkdir(exist_ok=True)
+        if not target.is_file():
+            run(["curl", "-fsSL", "--retry", "2", "-o", str(target), url])
+        return target
+
+    def file_entry(self, source):
+        """A file entry for an archive, at its path in opam's download cache
+        when it has a checksum."""
+        checksums = source["checksums"]
+        path = self.cached_file(checksums) or self.download(source["src"])
+        mirrors = list(source["mirrors"]) + [cache_url(c) for c in checksums]
+        if checksums:
+            entry_path = cache_path(checksums[0])
+        else:
+            entry_path = "urls/" + hashlib.sha256(source["src"].encode()).hexdigest()
+        return {
+            "path": entry_path,
+            "url": source["src"],
+            "mirrors": mirrors,
+            "hash": sri_sha256(path.read_bytes()),
+        }
+
+    def vcs_entry(self, url, path):
+        kind = vcs_of(url)
+        fetch_url, ref = split_vcs(url)
+        if kind == "git":
+            rev = ref
+            if not re.fullmatch(r"[0-9a-f]{40}", rev or ""):
+                out = run(["git", "ls-remote", fetch_url, ref or "HEAD"], capture=True)
+                lines = [line.split("\t") for line in out.splitlines() if line]
+                if not lines:
+                    fail(f"{url}: git cannot find {ref or 'HEAD'}")
+                # A tag's peeled commit comes after the tag object.
+                peeled = [line for line in lines if line[1].endswith("^{}")]
+                rev = (peeled or lines)[0][0]
+            # opam checks out a git source with its submodules.
+            out = run(
+                ["nix-prefetch-git", "--quiet", "--fetch-submodules", "--url", fetch_url, "--rev", rev],
+                capture=True,
+            )
+            return {
+                "path": path,
+                "git": {"url": fetch_url, "rev": rev, "submodules": True, "leaveDotGit": False},
+                "hash": json.loads(out)["hash"],
+            }
+        if kind == "hg":
+            # A branch or tag moves, so the lock keeps the node it names now.
+            rev = run(
+                ["hg", "identify", "--rev", ref or "default", "--template", "{node}", fetch_url],
+                capture=True,
+            ).strip()
+            out = run(["nix-prefetch-hg", fetch_url, rev], capture=True)
+            nix32 = [line for line in out.splitlines() if line.strip()][-1].strip()
+            sri = run(
+                ["nix", "hash", "convert", "--hash-algo", "sha256", "--to", "sri", nix32], capture=True
+            ).strip()
+            return {"path": path, "hg": {"url": fetch_url, "rev": rev}, "hash": sri}
+        if kind == "darcs":
+            # A tag names a Darcs state. Without one, opam takes the head,
+            # and only a context file names that state, so the lock keeps
+            # the context's text.
+            cmd = ["nix-prefetch-darcs", "--quiet", "--repo", fetch_url]
+            if ref:
+                cmd += ["--tag", ref]
+            info = json.loads(run(cmd, capture=True))
+            context = None
+            if not ref:
+                context = pathlib.Path(info["context"]).read_text()
+            return {
+                "path": path,
+                "darcs": {"url": fetch_url, "rev": ref or None, "context": context},
+                "hash": info["hash"],
+            }
+        fail(f"{url}: the lock cannot fetch {kind} sources")
+
+
+
+def build_outputs(root, local_names):
+    """Builds the project's switch in the Nix sandbox from the lockfile
+    written so far, and reads the outputs from it: the files each local
+    package installs, relative to the switch prefix."""
+    lib, nixpkgs = library()
+    out = run(
+        [
+            "nix-build",
+            f"{lib}/lock-build.nix",
+            "--arg", "src", str(root),
+            "--arg", "nixpkgs", nixpkgs,
+            "--no-out-link",
+        ],
+        capture=True,
+    )
+    switch = pathlib.Path(out.strip().splitlines()[-1])
+    prefix = switch / "_opam"
+    outputs = {}
+    for name in local_names:
+        listing = switch / "nix-support" / "opam-purifier-files" / name
+        files = []
+        for line in listing.read_text().splitlines():
+            path = pathlib.Path(line.strip())
+            if line.strip() and path.is_relative_to(prefix) and (path.is_file() or path.is_symlink()):
+                files.append(str(path.relative_to(prefix)))
+        outputs[name] = sorted(files)
+    return outputs
+
+
+def resolve_pins(root, lockrun, packages, downloads):
+    """The pins: the pin-depends of the project's opam files, and of the
+    pinned packages' own opam files."""
+    pins = {}
+    queue = []
+    for p in packages:
+        queue.extend(pin_depends_of((root / p["opamFile"]).read_text()))
+    while queue:
+        package, url = queue.pop(0)
+        if package in pins:
+            continue
+        name = package.partition(".")[0]
+        nested = None
+        if url.startswith("file://") or not re.match(r"^[a-z+]+://", url):
+            path = url.removeprefix("file://")
+            full = (root / path).resolve()
+            if not full.is_relative_to(root.resolve()):
+                fail(f"pin-depends {package} points at {path}, outside the project")
+            pins[package] = {"package": package, "name": name, "kind": "project", "path": str(full.relative_to(root.resolve()))}
+            nested = full / f"{name}.opam" if (full / f"{name}.opam").is_file() else full / "opam"
+        elif vcs_of(url):
+            entry = lockrun.vcs_entry(url, f"sources/{package}")
+            downloads[entry["path"]] = entry
+            pins[package] = {"package": package, "name": name, "kind": "source", "path": entry["path"]}
+        else:
+            src, _, checksum = url.partition("#")
+            entry = lockrun.file_entry({"src": src, "checksums": [checksum] if checksum else [], "mirrors": []})
+            downloads[entry["path"]] = entry
+            pins[package] = {"package": package, "name": name, "kind": "url", "url": src}
+        if nested is not None and nested.is_file():
+            queue.extend(pin_depends_of(nested.read_text()))
+    return pins
+
+
+def lock(root, args, force):
+    previous = read_lock(root)
+    if args.repo:
+        repositories = []
+        for spec in args.repo:
+            name, sep, url = spec.partition("=")
+            if not sep:
+                fail(f"--repo {spec}: expected NAME=URL")
+            repositories.append({"name": name, "url": url})
+    elif previous:
+        repositories = previous["options"]["repositories"]
+    else:
+        repositories = [{"name": DEFAULT_REPOSITORY[0], "url": DEFAULT_REPOSITORY[1]}]
+    options = {
+        "repositories": repositories,
+        "withTest": not args.without_test,
+        "withDoc": args.with_doc,
+        "locked": any(root.glob("*.opam.locked")),
+    }
+    definition = definition_hash(root, options)
+    if (
+        previous
+        and not force
+        and previous.get("version") == LOCK_VERSION
+        and previous.get("definitionHash") == definition
+    ):
+        print(f"opam-purifier: {LOCK_FILE} is up to date")
+        return
+
+    packages = project_packages(root)
+    local_names = [p["name"] for p in packages]
+    with tempfile.TemporaryDirectory(prefix="opam-purifier-") as tmp:
+        lockrun = LockRun(root, options, pathlib.Path(tmp))
+        lockrun.init()
+
+        systems = {}
+        for system in SYSTEMS:
+            print(f"opam-purifier: solving for {system}", file=sys.stderr)
+            installs = lockrun.solve(system, local_names)
+            depexts = set()
+            for package in installs:
+                depexts.update(d.strip('"') for d in lockrun.package_field(package, "depexts", system=system).split())
+            systems[system] = {"install": installs, "depexts": sorted(depexts)}
+        all_packages = sorted({p for s in systems.values() for p in s["install"]})
+
+        downloads = {}
+        pins = resolve_pins(root, lockrun, packages, downloads)
+        pinned_names = {p["name"] for p in pins.values()}
+
+        # The downloads of every solved package. A package whose source is
+        # a version-control repository is installed from its checkout.
+        for package in all_packages:
+            name = package.partition(".")[0]
+            if name in pinned_names:
+                continue
+            for source in sources_of(lockrun.raw_opam(package)):
+                if vcs_of(source["src"]):
+                    entry = lockrun.vcs_entry(source["src"], f"sources/{package}")
+                    pins[package] = {"package": package, "name": name, "kind": "source", "path": entry["path"], "repository": True}
+                else:
+                    entry = lockrun.file_entry(source)
+                downloads[entry["path"]] = entry
+
+        repository = lockrun.repository_entries(all_packages, pinned_names)
+        opam_version = run(["opam", "--version"], capture=True).strip()
+
+    for p in packages:
+        p["files"] = []
+    lock_data = {
+        "version": LOCK_VERSION,
+        "opam": opam_version,
+        "definitionHash": definition,
+        "options": options,
+        "packages": packages,
+        "systems": systems,
+        "pins": sorted(pins.values(), key=lambda p: p["package"]),
+        "repository": repository,
+        "downloads": [downloads[k] for k in sorted(downloads)],
+    }
+    (root / LOCK_FILE).write_text(json.dumps(lock_data, indent=2) + "\n")
+    print("opam-purifier: building the project in the Nix sandbox to record its outputs", file=sys.stderr)
+    outputs = build_outputs(root, local_names)
+    for p in packages:
+        p["files"] = outputs.get(p["name"], [])
+    (root / LOCK_FILE).write_text(json.dumps(lock_data, indent=2) + "\n")
+    print(f"opam-purifier: wrote {LOCK_FILE} with {len(all_packages)} packages")
+
+
+def fetch(url, out):
+    """The download hook of the lock run (OPAMFETCH)."""
+    log = os.environ.get("OPAM_PURIFIER_FETCH_LOG")
+    if log:
+        with open(log, "a") as f:
+            f.write(f"{url}\t{out}\n")
+    os.execvp("curl", ["curl", "-fsSL", "--retry", "2", "-o", out, url])
+
+
+# ---------------------------------------------------------------------------
+# The interactive mode.
+
+
+def library():
+    lib = os.environ.get("OPAM_PURIFIER_LIB")
+    nixpkgs = os.environ.get("OPAM_PURIFIER_NIXPKGS")
+    if not lib or not nixpkgs:
+        fail("OPAM_PURIFIER_LIB and OPAM_PURIFIER_NIXPKGS are unset; run opam-purifier from its Nix package")
+    return lib, nixpkgs
+
+
+def current_system():
+    machine = os.uname().machine
+    for system in SYSTEMS:
+        if system.split("-")[0] == machine:
+            return system
+    fail(f"this machine ({machine}) is not one of the systems a lock covers")
+
+
+def current_options(root, lock_data):
+    options = dict(lock_data["options"])
+    options["locked"] = any(root.glob("*.opam.locked"))
+    return options
+
+
+def realize(root):
+    """Builds the offline state of the lockfile: the repository, the
+    download cache, the sources and the scripts that set up a root. The
+    out-link is the GC root that keeps every locked file alive."""
+    lib, nixpkgs = library()
+    state = root / STATE_DIR
+    state.mkdir(exist_ok=True)
+    link = state / "gcroot"
+    run(
+        [
+            "nix-build",
+            f"{lib}/realize.nix",
+            "--arg", "lockFile", str(root / LOCK_FILE),
+            "--argstr", "system", current_system(),
+            "--arg", "nixpkgs", nixpkgs,
+            "--out-link", str(link),
+        ],
+        capture=True,
+    )
+    return link.resolve()
+
+
+def offline_env(root, state_path):
+    env = dict(os.environ)
+    env.update(
+        {
+            "OPAMROOT": str(root / STATE_DIR / "root"),
+            "OPAMYES": "1",
+            "OPAMNODEPEXTS": "1",
+            "OPAMCONFIRMLEVEL": "unsafe-yes",
+            "OPAMNOENVNOTICE": "1",
+            "OPAMFETCH": f"{state_path}/bin/offline-fetch %{{url}}% %{{out}}%",
+            "OPAMSWITCH": str(root),
+        }
+    )
+    env.update(platform_env(current_system()))
+    return env
+
+
+def install(root):
+    lock_data = read_lock(root)
+    if lock_data is None:
+        fail(f"no {LOCK_FILE}; run `opam-purifier lock` first")
+    if definition_hash(root, current_options(root, lock_data)) != lock_data["definitionHash"]:
+        fail(f"{LOCK_FILE} is out of date with the opam files; run `opam-purifier lock`")
+    state = realize(root)
+    env = offline_env(root, state)
+    # The root is made afresh from the lock each time, so it holds the
+    # locked repository and download cache and nothing else.
+    opam_root = root / STATE_DIR / "root"
+    if opam_root.exists():
+        shutil.rmtree(opam_root)
+    if (root / "_opam").exists():
+        shutil.rmtree(root / "_opam")
+    run(["bash", f"{state}/bin/install-dependencies", str(root)], env=env, cwd=root)
+    print("opam-purifier: _opam holds the locked dependencies; run `opam-purifier opam exec -- dune build`")
+
+
+def opam_command(root, argv):
+    if read_lock(root) is None:
+        fail(f"no {LOCK_FILE}; run `opam-purifier lock` first")
+    if not (root / STATE_DIR / "root").is_dir():
+        fail("no purifier root; run `opam-purifier install` first")
+    env = offline_env(root, (root / STATE_DIR / "gcroot").resolve())
+    os.execvpe("opam", ["opam", *argv], env)
+
+
+# ---------------------------------------------------------------------------
+# Publishing.
+
+
+def publish(root, args):
+    lib, nixpkgs = library()
+    lock_data = read_lock(root)
+    if lock_data is None:
+        fail(f"no {LOCK_FILE}; run `opam-purifier lock` first")
+    names = [p["name"] for p in lock_data["packages"]]
+    package = args.package or names[0]
+    if package not in names:
+        fail(f"{package} is not a package of this project ({', '.join(names)})")
+    entry = next(p for p in lock_data["packages"] if p["name"] == package)
+    (root / STATE_DIR).mkdir(exist_ok=True)
+    link = root / STATE_DIR / f"release-{package}"
+    run(
+        [
+            "nix-build",
+            f"{lib}/release.nix",
+            "--arg", "src", str(root),
+            "--argstr", "name", package,
+            "--argstr", "version", entry["version"],
+            "--arg", "nixpkgs", nixpkgs,
+            "--out-link", str(link),
+        ],
+        capture=True,
+    )
+    archive = next(link.resolve().iterdir())
+    data = archive.read_bytes()
+    sha256 = hashlib.sha256(data).hexdigest()
+    sha512 = hashlib.sha512(data).hexdigest()
+    print(f"opam-purifier: {archive}")
+    print(f"  sha256={sha256}")
+    print(f"  sha512={sha512}")
+    if not args.url:
+        print("opam-purifier: upload the archive, then run `opam-purifier publish --url URL` to submit it")
+        return
+    with urllib.request.urlopen(args.url) as response:
+        served = response.read()
+    if served != data:
+        fail(f"{args.url} serves different bytes from the archive Nix built")
+    opam_text = (root / entry["opamFile"]).read_text()
+    opam_text = re.sub(r"(?ms)^url\s*\{.*?\}\s*", "", opam_text).rstrip() + (
+        f'\nurl {{\n  src: "{args.url}"\n  checksum: [\n'
+        f'    "sha256={sha256}"\n    "sha512={sha512}"\n  ]\n}}\n'
+    )
+    if args.repository:
+        target = pathlib.Path(args.repository) / "packages" / package / f"{package}.{entry['version']}" / "opam"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(opam_text)
+        print(f"opam-purifier: wrote {target}; commit it and open a pull request on the repository")
+        return
+    publisher = os.environ.get("OPAM_PURIFIER_OPAM_PUBLISH", "opam-publish")
+    if shutil.which(publisher) is None:
+        fail(f"{publisher} is not on PATH; pass --repository PATH to write the opam file into a checkout of the repository")
+    with tempfile.TemporaryDirectory() as tmp:
+        opam_file = pathlib.Path(tmp) / f"{package}.opam"
+        opam_file.write_text(opam_text)
+        run([publisher, args.url, str(opam_file)])
+
+
+# ---------------------------------------------------------------------------
+
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "fetch":
+        fetch(sys.argv[2], sys.argv[3])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "opam":
+        opam_command(pathlib.Path.cwd(), sys.argv[2:])
+        return
+    parser = argparse.ArgumentParser(prog="opam-purifier")
+    sub = parser.add_subparsers(dest="command", required=True)
+    for name in ("lock", "relock"):
+        p = sub.add_parser(name)
+        p.add_argument("--repo", action="append", help="NAME=URL of a repository to resolve from")
+        p.add_argument("--without-test", action="store_true", help="leave out test dependencies")
+        p.add_argument("--with-doc", action="store_true", help="lock documentation dependencies too")
+    sub.add_parser("install")
+    p = sub.add_parser("publish")
+    p.add_argument("package", nargs="?")
+    p.add_argument("--url", help="where the release archive is served")
+    p.add_argument("--repository", help="a checkout of the opam repository to write the opam file into")
+    args = parser.parse_args()
+    root = pathlib.Path.cwd()
+    if args.command in ("lock", "relock"):
+        lock(root, args, force=args.command == "relock")
+    elif args.command == "install":
+        install(root)
+    elif args.command == "publish":
+        publish(root, args)
+
+
+if __name__ == "__main__":
+    main()

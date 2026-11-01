@@ -1,0 +1,21 @@
+opam-version: "2.0"
+name: "beta"
+version: "0.2.0"
+synopsis: "A fixture for opam-purifier: an executable on a URL pin and a local package"
+maintainer: "nix-purifiers"
+authors: "nix-purifiers"
+license: "MIT"
+homepage: "https://github.com/nix-purifiers/opam-purifier"
+bug-reports: "https://github.com/nix-purifiers/opam-purifier/issues"
+depends: [
+  "ocaml" {>= "4.14"}
+  "dune" {>= "3.0"}
+  "alpha" {= version}
+  "uutf"
+]
+pin-depends: [
+  ["uutf.1.0.3" "https://github.com/dbuenzli/uutf/archive/refs/tags/v1.0.3.tar.gz"]
+]
+build: [
+  ["dune" "build" "-p" name "-j" jobs]
+]

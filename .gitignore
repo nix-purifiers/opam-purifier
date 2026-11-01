@@ -1,0 +1,4 @@
+/result*
+.opam-purifier/
+_opam/
+_build/
