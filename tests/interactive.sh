@@ -3,31 +3,44 @@
 #
 # What runs outside the Nix sandbox, on copies of the fixtures. Each
 # section is a function; arguments name the sections to run, and the
-# default is all of them:
+# default is all of them. CI runs the conformance sections as jobs of the
+# same name.
 #
-#   reproduce    a relock of each fixture, against the pinned repository
-#                its lockfile names, writes the committed lockfile byte
-#                for byte, and a second `lock` finds it up to date
-#   interactive  `install` sets up _opam offline, dune builds, runs and
-#                tests the project in it, opam refuses a package the lock
-#                does not hold, and a lock with --tool installs the tool
-#   lockfiles    with opam's own lock file beside the opam file, the lock
-#                run solves with --locked, to the same versions
-#   publish      the archive Nix built, served from a local server, goes
-#                into a repository checkout and to a stand-in for
-#                opam-publish; a different archive at the URL is refused
-#   negative     a hand-edited lockfile, a malformed one, a tampered hash,
-#                a missing download and stale opam files each fail with a
-#                message that names the command to run
-#   repository   a custom repository whose package has a git source,
-#                served over HTTP, locked with --repo and built
-#   darcs        two Darcs repositories made here and served over HTTP,
-#                one pinned by tag and one by its head, locked and built
-#   hg           a Mercurial repository served by `hg serve`, pinned by
-#                its default branch, which the lock resolves to a node
+#   conformance-relock   a lock of each fixture, and of ocaml-uri with its
+#                        lockfile outside the source, against the pinned
+#                        repository its lockfile names, writes the
+#                        committed lockfile byte for byte
+#   conformance-offline  after `prefetch`, with the network cut off, dune
+#                        builds, runs and tests the project, opam refuses a
+#                        package the lock does not hold and names the
+#                        command to run, and a tool locked with --tool is
+#                        installed
+#   conformance-rebuild  `nix build --rebuild` of the switch of hello gives
+#                        the same output
+#   lockfiles            with opam's own lock file beside the opam file,
+#                        the lock run solves with --locked, to the same
+#                        versions
+#   publish              the archive Nix built, served from a local server,
+#                        goes into a repository checkout and to a stand-in
+#                        for opam-publish; a different archive at the URL
+#                        is refused
+#   negative             the commands fail on a tampered, malformed or
+#                        stale lockfile with a message that names the
+#                        command to run, and a wrong download hash fails
+#                        the build
+#   repository           a custom repository whose package has a git
+#                        source, served over HTTP, locked with --repo and
+#                        built
+#   darcs                two Darcs repositories made here and served over
+#                        HTTP, one pinned by tag and one by its head,
+#                        locked and built
+#   hg                   a Mercurial repository served by `hg serve`,
+#                        pinned by its default branch, which the lock
+#                        resolves to a node
 #
 # It runs from the repository root and needs nix with flakes and network
-# access.
+# access. conformance-offline also needs a way to cut the network off:
+# unprivileged user namespaces, or sudo.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -45,6 +58,7 @@ python="$(nix build --no-link --print-out-paths 'nixpkgs#python3')/bin/python3"
 darcs="$(nix build --no-link --print-out-paths 'nixpkgs#darcs')/bin/darcs"
 hg="$(nix build --no-link --print-out-paths 'nixpkgs#mercurial')/bin/hg"
 git="$(nix build --no-link --print-out-paths 'nixpkgs#git')/bin/git"
+util_linux="$(nix build --no-link --print-out-paths 'nixpkgs#util-linux.bin')/bin"
 author="nix-purifiers <nix-purifiers@example.invalid>"
 
 fixture() {
@@ -55,13 +69,39 @@ fixture() {
 }
 
 # Builds an attribute of buildOpamProject for a project directory, with
-# the flake's overlay, and prints the store path.
+# the flake's library, and prints the store path.
 build() {
   local src="$1" attr="$2"
   nix build --no-link --print-out-paths --impure --expr "
     let flake = builtins.getFlake \"$root\";
-        pkgs = flake.inputs.nixpkgs.legacyPackages.\${builtins.currentSystem}.extend flake.overlays.default;
-    in (pkgs.buildOpamProject { src = $src; }).$attr"
+        pkgs = flake.inputs.nixpkgs.legacyPackages.\${builtins.currentSystem};
+    in (flake.lib.opam-purifier.buildOpamProject { inherit pkgs; src = $src; }).$attr"
+}
+
+# Runs a command with the network cut off: in a new network namespace,
+# as the current user.
+offline() {
+  if "$util_linux/unshare" --user --map-root-user --net true 2>/dev/null; then
+    "$util_linux/unshare" --user --map-root-user --net -- env OPAMROOTISOK=1 "$@"
+  else
+    sudo --preserve-env env "PATH=$PATH" "$util_linux/unshare" --net -- \
+      "$util_linux/setpriv" --reuid="$(id -u)" --regid="$(id -g)" --clear-groups -- "$@"
+  fi
+}
+
+# Runs a script in the environment of the everyday loop of a project,
+# with the network cut off.
+in_loop() {
+  local dir="$1" script="$2"
+  offline bash -c "
+    set -euo pipefail
+    cd '$dir'
+    if (exec 3<>/dev/tcp/1.1.1.1/443) 2>/dev/null; then
+      echo 'the network is still reachable' >&2
+      exit 1
+    fi
+    source .opam-purifier/env.sh
+    $script"
 }
 
 # Expects a command to fail with a message matching a pattern.
@@ -78,7 +118,6 @@ expect_failure() {
     exit 1
   fi
 }
-
 free_port() {
   "$python" -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
 }
@@ -166,27 +205,37 @@ pathlib.Path(file).write_text(json.dumps(lock, indent=2, ensure_ascii=False) + "
 EOF
 }
 
-section_reproduce() {
-  echo "== reproduce"
+section_conformance-relock() {
+  echo "== conformance-relock"
   local name dir
   for name in hello workspace; do
     dir="$(fixture "$name")"
-    (cd "$dir" && "$cli" relock)
+    (cd "$dir" && "$cli" lock)
     cmp "$root/tests/fixtures/$name/opam-purifier.lock.json" "$dir/opam-purifier.lock.json"
-    (cd "$dir" && "$cli" lock) | grep -q 'is up to date'
   done
+  # ocaml-uri, at the commit tests/default.nix builds, with its lockfile
+  # outside the source.
+  mkdir -p "$work/uri"
+  curl -fsSL https://github.com/mirage/ocaml-uri/archive/c336c796f4deb8979a4c7ceea3bef34b46240623.tar.gz |
+    tar -xz -C "$work/uri" --strip-components=1
+  cp "$root/tests/real-world/uri/opam-purifier.lock.json" "$work/uri.lock.json"
+  chmod u+w "$work/uri.lock.json"
+  (cd "$work/uri" && "$cli" lock --lockfile "$work/uri.lock.json")
+  cmp "$root/tests/real-world/uri/opam-purifier.lock.json" "$work/uri.lock.json"
+  [ ! -e "$work/uri/opam-purifier.lock.json" ]
 }
 
-section_interactive() {
-  echo "== interactive"
+section_conformance-offline() {
+  echo "== conformance-offline"
   local dir
   dir="$(fixture hello)"
-  (cd "$dir" && "$cli" install)
-  (cd "$dir" && "$cli" opam exec -- dune build)
-  [ "$("$dir/_build/default/bin/main.exe")" = "Hello, Nix!" ]
-  (cd "$dir" && "$cli" opam exec -- dune test)
-  expect_failure 'opam-purifier lock --tool' sh -c "cd '$dir' && '$cli' opam install --yes cmdliner"
-  # A tool locked for the interactive mode installs with `install`, and the
+  (cd "$dir" && "$cli" prefetch)
+  in_loop "$dir" '
+    dune build
+    [ "$(./_build/default/bin/main.exe)" = "Hello, Nix!" ]
+    dune test'
+  expect_failure 'opam-purifier lock --tool' in_loop "$dir" 'opam install --yes cmdliner'
+  # A tool locked for the everyday loop is installed by prefetch, and the
   # sandboxed build leaves it out.
   (cd "$dir" && "$cli" lock --tool cmdliner)
   "$python" - "$dir/opam-purifier.lock.json" <<'EOF'
@@ -196,16 +245,24 @@ for system in lock["systems"].values():
     assert any(p.startswith("cmdliner.") for p in system["tools"]), system
     assert not any(p.startswith("cmdliner.") for p in system["install"]), system
 EOF
-  (cd "$dir" && "$cli" install)
-  (cd "$dir" && "$cli" opam list --installed --short) | grep -qx cmdliner
+  (cd "$dir" && "$cli" prefetch)
+  in_loop "$dir" 'opam list --installed --short | grep -qx cmdliner'
+}
+
+section_conformance-rebuild() {
+  echo "== conformance-rebuild"
+  local system
+  system="$(nix eval --impure --raw --expr builtins.currentSystem)"
+  nix build --no-link "$root#checks.$system.conformance-rebuild"
+  nix build --no-link --rebuild "$root#checks.$system.conformance-rebuild"
 }
 
 section_lockfiles() {
   echo "== lockfiles"
   local dir
   dir="$(fixture hello)"
-  (cd "$dir" && "$cli" install)
-  (cd "$dir" && "$cli" opam lock .)
+  (cd "$dir" && "$cli" prefetch)
+  in_loop "$dir" 'opam lock .'
   [ -f "$dir/hello.opam.locked" ]
   (cd "$dir" && "$cli" lock)
   "$python" - "$dir/opam-purifier.lock.json" "$dir/hello.opam.locked" <<'EOF'
@@ -226,14 +283,14 @@ section_publish() {
   local dir archive port url published
   dir="$(fixture hello)"
   # Without --url, publish builds the archive and prints its path.
-  archive="$(cd "$dir" && "$cli" publish hello | sed -n 's|^opam-purifier: \(/nix/store/.*\.tar\.gz\)$|\1|p')"
+  archive="$(cd "$dir" && "$cli" publish | sed -n 's|^opam-purifier: \(/nix/store/.*\.tar\.gz\)$|\1|p')"
   [ -f "$archive" ]
   mkdir -p "$work/served"
   cp --no-preserve=mode "$archive" "$work/served/"
   port="$(serve "$work/served")"
   url="http://127.0.0.1:$port/hello-0.1.0.tar.gz"
   mkdir -p "$work/repository"
-  (cd "$dir" && "$cli" publish hello --url "$url" --repository "$work/repository")
+  (cd "$dir" && "$cli" publish --url "$url" --repository "$work/repository")
   published="$work/repository/packages/hello/hello.0.1.0/opam"
   grep -q "src: \"$url\"" "$published"
   grep -q "sha256=$(sha256sum "$archive" | cut -d' ' -f1)" "$published"
@@ -242,39 +299,32 @@ section_publish() {
 printf '%s\n' "\$@" > "$work/opam-publish.args"
 EOF
   chmod +x "$work/opam-publish"
-  (cd "$dir" && OPAM_PURIFIER_OPAM_PUBLISH="$work/opam-publish" "$cli" publish hello --url "$url")
+  (cd "$dir" && OPAM_PURIFIER_OPAM_PUBLISH="$work/opam-publish" "$cli" publish --url "$url")
   head -n 1 "$work/opam-publish.args" | grep -qx "$url"
   echo tampered >>"$work/served/hello-0.1.0.tar.gz"
-  expect_failure 'serves different bytes' sh -c "cd '$dir' && '$cli' publish hello --url '$url' --repository '$work/repository'"
+  expect_failure 'serves different bytes' sh -c "cd '$dir' && '$cli' publish --url '$url' --repository '$work/repository'"
 }
 
 section_negative() {
   echo "== negative"
   local dir
   dir="$(fixture hello)"
-  # A lockfile edited by hand, with its lockHash left as it was.
   cp "$dir/opam-purifier.lock.json" "$work/edited.json"
+  # A lockfile edited by hand, with its lockHash left as it was.
   rewrite_lock "$dir/opam-purifier.lock.json" 'lock["downloads"][0]["url"] = "https://example.invalid/x"' keep
-  expect_failure 'was changed after `opam-purifier lock` wrote it' build "$dir" switch.drvPath
-  expect_failure 'was changed after `opam-purifier lock` wrote it' sh -c "cd '$dir' && '$cli' install"
-  # A malformed lockfile.
-  head -c 200 "$work/edited.json" >"$dir/opam-purifier.lock.json"
-  expect_failure 'opam-purifier.lock.json' build "$dir" switch.drvPath
-  # A tampered hash, re-hashed so that only the fetch can notice.
+  expect_failure 'was changed after `opam-purifier lock` wrote it' sh -c "cd '$dir' && '$cli' prefetch"
+  expect_failure 'was changed after `opam-purifier lock` wrote it' sh -c "cd '$dir' && '$cli' publish"
+  # A malformed lockfile, kept outside the project.
+  head -c 200 "$work/edited.json" >"$work/malformed.json"
   cp "$work/edited.json" "$dir/opam-purifier.lock.json"
+  expect_failure 'run `opam-purifier lock` to write it again' sh -c "cd '$dir' && '$cli' prefetch --lockfile '$work/malformed.json'"
+  # A wrong download hash, re-hashed so that only the fetch can notice.
   rewrite_lock "$dir/opam-purifier.lock.json" 'next(d for d in lock["downloads"] if "url" in d)["hash"] = "sha256-" + "A" * 43 + "="' rehash
-  expect_failure 'hash mismatch' build "$dir" switch
-  # A download missing from the lockfile: opam asks for it, and the
-  # offline download command names the URL and the command to run.
-  cp "$work/edited.json" "$dir/opam-purifier.lock.json"
-  rewrite_lock "$dir/opam-purifier.lock.json" 'lock["downloads"] = [d for d in lock["downloads"] if "ocaml-base-compiler" not in d.get("url", "") and "ocaml-5" not in d.get("url", "")]' rehash
-  expect_failure 'is not in the lockfile; run `opam-purifier lock`' build "$dir" switch
+  expect_failure 'hash mismatch' build "$dir" packages.hello
   # Opam files edited after the lock.
   cp "$work/edited.json" "$dir/opam-purifier.lock.json"
   echo '# edited' >>"$dir/hello.opam"
-  expect_failure 'run `opam-purifier lock`' build "$dir" switch.drvPath
-  expect_failure 'run `opam-purifier lock`' sh -c "cd '$dir' && '$cli' install"
-  expect_failure 'run `opam-purifier lock`' sh -c "cd '$dir' && '$cli' opam list"
+  expect_failure 'run `opam-purifier lock`' sh -c "cd '$dir' && '$cli' prefetch"
 }
 
 section_repository() {
@@ -372,7 +422,7 @@ EOF
 
 sections=("$@")
 if [ "${#sections[@]}" -eq 0 ]; then
-  sections=(reproduce interactive lockfiles publish negative repository darcs hg)
+  sections=(conformance-relock conformance-offline conformance-rebuild lockfiles publish negative repository darcs hg)
 fi
 for section in "${sections[@]}"; do
   "section_$section"

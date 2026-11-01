@@ -1,9 +1,15 @@
 # SPDX-License-Identifier: MIT
 #
-# Reads an opam-purifier lockfile (written by `opam-purifier lock`).
-{ lockFile }:
+# Reads an opam-purifier lockfile (written by `opam-purifier lock`), and
+# checks that it is whole, unchanged and made from the opam files in
+# `src`.
+{ lockFile, src }:
 let
-  text = builtins.readFile lockFile;
+  text =
+    if builtins.pathExists lockFile then
+      builtins.readFile lockFile
+    else
+      throw "opam-purifier: ${toString lockFile} does not exist; run `opam-purifier lock` in the project, and add the lockfile to the repository.";
   # A JSON parse error stops evaluation before tryEval can catch it, so
   # the reader first checks that the text is shaped like the JSON object
   # the CLI writes: it starts with `{` and ends with `}` and a newline. A
@@ -15,7 +21,7 @@ let
     if shaped then
       builtins.fromJSON text
     else
-      throw "opam-purifier: ${toString lockFile} is not a lockfile that `opam-purifier lock` wrote (it is not a whole JSON object); run `opam-purifier relock` to write it again.";
+      throw "opam-purifier: ${toString lockFile} is not a lockfile that `opam-purifier lock` wrote (it is not a whole JSON object); run `opam-purifier lock` to write it again.";
 
   supportedVersion = import ./lock-version.nix;
 
@@ -48,31 +54,11 @@ let
   intact =
     (lock.lockHash or null)
     == "sha256:${builtins.hashString "sha256" (builtins.toJSON (removeAttrs lock [ "lockHash" ]))}";
-in
-assert
-  (lock.version or null) == supportedVersion
-  || throw "opam-purifier: ${toString lockFile} has lock format version ${
-    toString (lock.version or "none")
-  }; this library reads version ${toString supportedVersion}. Run `opam-purifier relock` with the opam-purifier version that provides this library.";
-assert
-  intact
-  || throw "opam-purifier: ${toString lockFile} was changed after `opam-purifier lock` wrote it (its lockHash does not match its content); run `opam-purifier relock`.";
-lock
-// {
-  inherit storeName downloadName;
-
-  # The downloads by kind. A file sits at its path in opam's download
-  # cache (or under urls/ when its opam file gives no checksum). A
-  # checkout sits under sources/.
-  files = builtins.filter (d: d ? url) lock.downloads;
-  checkouts = builtins.filter (d: !(d ? url)) lock.downloads;
-
   # Whether the lockfile was made from the opam files under `src`: the
   # same manifest bin/opam-purifier hashes (definition_hash), with a line
   # `<path>\t<sha256>` for each definition file and a line for the
   # options. A lockfile written before an edit to an opam file is stale.
-  isCurrentFor =
-    src:
+  isCurrent =
     let
       inDir =
         dir: prefix:
@@ -97,11 +83,32 @@ lock
         + "options\t${builtins.toJSON lock.options}\n";
     in
     lock.definitionHash == "sha256:${builtins.hashString "sha256" manifest}";
+in
+assert
+  (lock.version or null) == supportedVersion
+  || throw "opam-purifier: ${toString lockFile} has lock format version ${
+    toString (lock.version or "none")
+  }; this library reads version ${toString supportedVersion}. Run `opam-purifier lock` with the opam-purifier version that provides this library.";
+assert
+  intact
+  || throw "opam-purifier: ${toString lockFile} was changed after `opam-purifier lock` wrote it (its lockHash does not match its content); run `opam-purifier lock`.";
+assert
+  isCurrent
+  || throw "opam-purifier: ${toString lockFile} was made from other opam files than the ones in ${toString src}; run `opam-purifier lock`.";
+lock
+// {
+  inherit storeName downloadName;
+
+  # The downloads by kind. A file sits at its path in opam's download
+  # cache (or under urls/ when its opam file gives no checksum). A
+  # checkout sits under sources/.
+  files = builtins.filter (d: d ? url) lock.downloads;
+  checkouts = builtins.filter (d: !(d ? url)) lock.downloads;
 
   # What a system installs: the locked name.version list and the nixpkgs
   # attributes the depexts name.
   forSystem =
     system:
     lock.systems.${system}
-      or (throw "opam-purifier: ${toString lockFile} has no solution for ${system}; the lock covers ${builtins.concatStringsSep ", " (builtins.attrNames lock.systems)}.");
+      or (throw "opam-purifier: ${toString lockFile} has no solution for ${system}; the lock covers ${builtins.concatStringsSep ", " (builtins.attrNames lock.systems)}. Run `opam-purifier lock`.");
 }

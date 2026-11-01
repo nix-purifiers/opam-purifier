@@ -1,23 +1,21 @@
 # SPDX-License-Identifier: MIT
 #
-# The release archive of an opam package: the project source as
+# The release archive of an opam project: the project source as
 # <name>-<version>.tar.gz, with the top directory <name>-<version>/, the
 # layout opam's `url` section expects. The archive is reproducible: the
 # entries are sorted, owned by 0:0, dated at the epoch, and gzip writes no
 # name or time, so the same source gives the same bytes and checksum.
 {
-  runCommand,
-  gnutar,
-  gzip,
+  pkgs,
   src,
   name,
   version,
 }:
-runCommand "${name}-${version}-release"
+pkgs.runCommand "${name}-${version}-release"
   {
     nativeBuildInputs = [
-      gnutar
-      gzip
+      pkgs.gnutar
+      pkgs.gzip
     ];
   }
   ''

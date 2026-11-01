@@ -4,16 +4,17 @@
 # opam-purifier: locks every file an opam project downloads, so that Nix
 # can build the project offline in its sandbox.
 #
-#   opam-purifier lock             lock, when the build definition changed
-#   opam-purifier relock           lock, whatever changed
-#   opam-purifier install          set up the local switch _opam offline
-#   opam-purifier opam ARGS...     run opam on the purifier's root, offline
-#   opam-purifier publish ...      build a release archive with Nix and
-#                                  submit its opam file
+#   opam-purifier lock       solve the project and record every download
+#   opam-purifier prefetch   realize what the everyday loop and the editor
+#                            need, and set up the local switch _opam
+#   opam-purifier publish    build the release archive with Nix and submit
+#                            the opam files that point at it
 #
 # The commands run in the project root, where the project's opam files
-# are. The package that installs this script sets OPAM_PURIFIER_LIB (the
-# Nix library) and OPAM_PURIFIER_NIXPKGS (the nixpkgs it builds with).
+# are, and each takes --lockfile PATH for a lockfile outside it. The
+# package that installs this script sets OPAM_PURIFIER_LIB (the Nix
+# library), OPAM_PURIFIER_NIXPKGS (the nixpkgs it builds with) and
+# OPAM_PURIFIER_PURIFIER (the source of the purifier library).
 
 import argparse
 import base64
@@ -411,13 +412,12 @@ def lock_hash(lock_data):
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def write_lock(root, lock_data):
+def write_lock(path, lock_data):
     lock_data["lockHash"] = lock_hash(lock_data)
-    (root / LOCK_FILE).write_text(json.dumps(lock_data, indent=2, ensure_ascii=False) + "\n")
+    path.write_text(json.dumps(lock_data, indent=2, ensure_ascii=False) + "\n")
 
 
-def read_lock(root):
-    path = root / LOCK_FILE
+def read_lock(path):
     if not path.is_file():
         return None
     return json.loads(path.read_text())
@@ -695,7 +695,8 @@ class LockRun:
             sri = run(
                 ["nix", "hash", "convert", "--hash-algo", "sha256", "--to", "sri", nix32], capture=True
             ).strip()
-            return {"path": path, "hg": {"url": fetch_url, "rev": rev}, "hash": sri}
+            # nix-prefetch-hg leaves subrepositories out by default.
+            return {"path": path, "hg": {"url": fetch_url, "rev": rev, "subrepos": False}, "hash": sri}
         if kind == "darcs":
             # A tag names a Darcs state. Without one, opam takes the head,
             # and only a context file names that state, so the lock keeps
@@ -726,21 +727,11 @@ class LockRun:
 
 
 
-def build_outputs(root, local_names):
+def build_outputs(root, lock_path, local_names):
     """Builds the project's switch in the Nix sandbox from the lockfile
-    written so far, and reads the outputs from it: the files each local
-    package installs, relative to the switch prefix."""
-    lib, nixpkgs = library()
-    out = run(
-        [
-            "nix-build",
-            f"{lib}/lock-build.nix",
-            "--arg", "src", str(root),
-            "--arg", "nixpkgs", nixpkgs,
-            "--no-out-link",
-        ],
-        capture=True,
-    )
+    written so far at lock_path, and reads the outputs from it: the files
+    each local package installs, relative to the switch prefix."""
+    out = run(nix_build(root, lock_path, "switch", ["--no-out-link"]), capture=True)
     switch = pathlib.Path(out.strip().splitlines()[-1])
     prefix = switch / "_opam"
     outputs = {}
@@ -789,8 +780,8 @@ def resolve_pins(root, lockrun, packages, downloads):
     return pins
 
 
-def lock(root, args, force):
-    previous = read_lock(root)
+def lock(root, lock_path, args):
+    previous = read_lock(lock_path)
     if args.repo:
         repositories = []
         for spec in args.repo:
@@ -823,15 +814,6 @@ def lock(root, args, force):
         "locked": any(root.glob("*.opam.locked")),
     }
     definition = definition_hash(root, options)
-    if (
-        previous
-        and not force
-        and previous.get("version") == LOCK_VERSION
-        and previous.get("definitionHash") == definition
-    ):
-        print(f"opam-purifier: {LOCK_FILE} is up to date")
-        return
-
     packages = project_packages(root, options["only"])
     local_names = [p["name"] for p in packages]
     with tempfile.TemporaryDirectory(prefix="opam-purifier-") as tmp:
@@ -887,13 +869,18 @@ def lock(root, args, force):
         "repository": repository,
         "downloads": [downloads[k] for k in sorted(downloads)],
     }
-    write_lock(root, lock_data)
-    print("opam-purifier: building the project in the Nix sandbox to record its outputs", file=sys.stderr)
-    outputs = build_outputs(root, local_names)
+    # The lockfile so far goes outside the project until the build that
+    # records the outputs succeeds, so a failed lock run leaves the
+    # project's lockfile as it was.
+    with tempfile.TemporaryDirectory(prefix="opam-purifier-lock-") as tmp:
+        provisional = pathlib.Path(tmp) / LOCK_FILE
+        write_lock(provisional, lock_data)
+        print("opam-purifier: building the project in the Nix sandbox to record its outputs", file=sys.stderr)
+        outputs = build_outputs(root, provisional, local_names)
     for p in packages:
         p["files"] = outputs.get(p["name"], [])
-    write_lock(root, lock_data)
-    print(f"opam-purifier: wrote {LOCK_FILE} with {len(all_packages)} packages")
+    write_lock(lock_path, lock_data)
+    print(f"opam-purifier: wrote {lock_path} with {len(all_packages)} packages")
 
 
 def fetch(url, out):
@@ -912,9 +899,13 @@ def fetch(url, out):
 def library():
     lib = os.environ.get("OPAM_PURIFIER_LIB")
     nixpkgs = os.environ.get("OPAM_PURIFIER_NIXPKGS")
-    if not lib or not nixpkgs:
-        fail("OPAM_PURIFIER_LIB and OPAM_PURIFIER_NIXPKGS are unset; run opam-purifier from its Nix package")
-    return lib, nixpkgs
+    purifier = os.environ.get("OPAM_PURIFIER_PURIFIER")
+    if not lib or not nixpkgs or not purifier:
+        fail(
+            "OPAM_PURIFIER_LIB, OPAM_PURIFIER_NIXPKGS and OPAM_PURIFIER_PURIFIER are unset; "
+            "run opam-purifier from its Nix package"
+        )
+    return lib, nixpkgs, purifier
 
 
 def current_system():
@@ -925,141 +916,118 @@ def current_system():
     fail(f"this machine ({machine}) is not one of the systems a lock covers")
 
 
-def current_options(root, lock_data):
-    options = dict(lock_data["options"])
-    options["locked"] = any(root.glob("*.opam.locked"))
-    return options
-
-
-def realize(root):
-    """Builds the offline state of the lockfile: the repository, the
-    download cache, the sources and the scripts that set up a root. The
-    out-link is the GC root that keeps every locked file alive."""
-    lib, nixpkgs = library()
-    state = root / STATE_DIR
-    state.mkdir(exist_ok=True)
-    link = state / "gcroot"
-    run(
-        [
-            "nix-build",
-            f"{lib}/realize.nix",
-            "--arg", "lockFile", str(root / LOCK_FILE),
-            "--argstr", "system", current_system(),
-            "--arg", "nixpkgs", nixpkgs,
-            "--out-link", str(link),
-        ],
-        capture=True,
-    )
-    return link.resolve()
-
-
-def in_shell(root, cmd):
-    """The command, run inside nix/lib/shell.nix: the tools of the
-    sandboxed build and the system packages of the lock's depexts."""
-    lib, nixpkgs = library()
+def nix_args(root, lock_path):
+    """The arguments of nix/lib/cli.nix for the project at root."""
+    _, nixpkgs, purifier = library()
     return [
-        "nix-shell",
-        f"{lib}/shell.nix",
-        "--arg", "lockFile", str(root / LOCK_FILE),
-        "--argstr", "system", current_system(),
+        "--arg", "src", str(root),
+        "--arg", "lockFile", str(lock_path),
         "--arg", "nixpkgs", nixpkgs,
-        "--run", shlex.join(cmd),
+        "--arg", "purifierSource", purifier,
+        "--argstr", "system", current_system(),
     ]
 
 
-def offline_env(root, state_path):
+def nix_build(root, lock_path, attr, extra):
+    """A nix-build of an attribute of nix/lib/cli.nix. Nix checks the
+    lockfile as it evaluates, and names the command that fixes it."""
+    lib, _, _ = library()
+    return ["nix-build", f"{lib}/cli.nix", "-A", attr, *nix_args(root, lock_path), *extra]
+
+
+ENV_SCRIPT = """\
+# The environment of the everyday loop, which `opam-purifier prefetch`
+# writes. Source it from bash, or from an .envrc for direnv:
+#
+#   source .opam-purifier/env.sh
+#
+# The tools and system libraries of the sandboxed build come first, then
+# the local switch _opam, on the opam root that holds only the locked
+# packages.
+source {shell_env}
+export OPAMROOT={opam_root}
+export OPAMSWITCH={root}
+export OPAMFETCH="{state}/bin/offline-fetch %{{url}}% %{{out}}%"
+export OPAMNODEPEXTS=1 OPAMNOENVNOTICE=1
+eval "$({state}/loop-bin/opam env --shell=bash)"
+export PATH={state}/loop-bin:"$PATH"
+"""
+
+
+def prefetch(root, lock_path):
+    """Realizes, with garbage-collector roots under .opam-purifier, what
+    the everyday loop needs: the offline state (the repository, the
+    downloads and the tools' downloads), and the environment of the
+    sandboxed build. It then sets up the local switch _opam from them, and
+    writes .opam-purifier/env.sh."""
+    lib, _, _ = library()
+    state_dir = root / STATE_DIR
+    state_dir.mkdir(exist_ok=True)
+    state_link = state_dir / "state"
+    print("opam-purifier: realizing the locked downloads", file=sys.stderr)
+    run(nix_build(root, lock_path, "state", ["--out-link", str(state_link)]), capture=True)
+    print("opam-purifier: realizing the environment of the build", file=sys.stderr)
+    shell_env = run(
+        [
+            "nix", "print-dev-env",
+            "--profile", str(state_dir / "shell-profile"),
+            "--file", f"{lib}/cli.nix",
+            *nix_args(root, lock_path),
+            "shell",
+        ],
+        capture=True,
+    )
+    (state_dir / "shell-env").write_text(shell_env)
+    # The root is made afresh from the lock each time, so it holds the
+    # locked repository and download cache and nothing else.
+    opam_root = state_dir / "root"
+    for old in (opam_root, root / "_opam"):
+        if old.exists():
+            shutil.rmtree(old)
     env = dict(os.environ)
     env.update(
         {
-            "OPAMROOT": str(root / STATE_DIR / "root"),
+            "OPAMROOT": str(opam_root),
             "OPAMYES": "1",
             "OPAMNODEPEXTS": "1",
             "OPAMCONFIRMLEVEL": "unsafe-yes",
             "OPAMNOENVNOTICE": "1",
-            "OPAMFETCH": f"{state_path}/bin/offline-fetch %{{url}}% %{{out}}%",
-            "OPAMSWITCH": str(root),
+            "OPAMFETCH": f"{state_link}/bin/offline-fetch %{{url}}% %{{out}}%",
         }
     )
     env.update(platform_env(current_system()))
-    return env
-
-
-def install(root):
-    lock_data = read_lock(root)
-    if lock_data is None:
-        fail(f"no {LOCK_FILE}; run `opam-purifier lock` first")
-    if definition_hash(root, current_options(root, lock_data)) != lock_data["definitionHash"]:
-        fail(f"the opam files changed since {LOCK_FILE} was written; run `opam-purifier lock`")
-    if lock_data.get("lockHash") != lock_hash(lock_data):
-        fail(f"{LOCK_FILE} was changed after `opam-purifier lock` wrote it; run `opam-purifier relock`")
-    state = realize(root)
-    env = offline_env(root, state)
-    # The root is made afresh from the lock each time, so it holds the
-    # locked repository and download cache and nothing else.
-    opam_root = root / STATE_DIR / "root"
-    if opam_root.exists():
-        shutil.rmtree(opam_root)
-    if (root / "_opam").exists():
-        shutil.rmtree(root / "_opam")
-    run(
-        in_shell(root, ["bash", f"{state}/bin/install-dependencies", str(root), str(root), "--with-tools"]),
-        env=env,
-        cwd=root,
+    print("opam-purifier: installing the locked packages into _opam", file=sys.stderr)
+    script = (
+        f"source {shlex.quote(str(state_dir / 'shell-env'))} && "
+        f"bash {shlex.quote(str(state_link))}/bin/install-dependencies {shlex.quote(str(root))} "
+        f"{shlex.quote(str(root))} --with-tools"
     )
-    print("opam-purifier: _opam holds the locked dependencies; run `opam-purifier opam exec -- dune build`")
-
-
-def opam_command(root, argv):
-    lock_data = read_lock(root)
-    if lock_data is None:
-        fail(f"no {LOCK_FILE}; run `opam-purifier lock` first")
-    if definition_hash(root, current_options(root, lock_data)) != lock_data["definitionHash"]:
-        fail(
-            f"the opam files changed since {LOCK_FILE} was written; run `opam-purifier lock`, "
-            "then `opam-purifier install`"
+    run(["bash", "-c", script], env=env, cwd=root)
+    (state_dir / "env.sh").write_text(
+        ENV_SCRIPT.format(
+            shell_env=shlex.quote(str(state_dir / "shell-env")),
+            opam_root=shlex.quote(str(opam_root)),
+            root=shlex.quote(str(root)),
+            state=shlex.quote(str(state_link)),
         )
-    if not (root / STATE_DIR / "root").is_dir() or not (root / "_opam").is_dir():
-        fail("no local switch; run `opam-purifier install` first")
-    env = offline_env(root, (root / STATE_DIR / "gcroot").resolve())
-    result = subprocess.run(in_shell(root, ["opam", *argv]), env=env, cwd=root, check=False)
-    if result.returncode != 0 and argv and argv[0] in ("install", "upgrade", "reinstall"):
-        print(
-            "opam-purifier: opam runs offline here, from the packages the lockfile holds. To add a "
-            "dependency, add it to the opam file and run `opam-purifier lock`, then "
-            "`opam-purifier install`; for an editor or other tool, run `opam-purifier lock --tool PACKAGE`.",
-            file=sys.stderr,
-        )
-    sys.exit(result.returncode)
+    )
+    print(
+        "opam-purifier: _opam holds the locked dependencies. Run `source .opam-purifier/env.sh` in bash, "
+        "or put that line in .envrc for direnv, then `dune build` and `dune test`."
+    )
 
 
 # ---------------------------------------------------------------------------
 # Publishing.
 
 
-def publish(root, args):
-    lib, nixpkgs = library()
-    lock_data = read_lock(root)
+def publish(root, lock_path, args):
+    lock_data = read_lock(lock_path)
     if lock_data is None:
-        fail(f"no {LOCK_FILE}; run `opam-purifier lock` first")
-    names = [p["name"] for p in lock_data["packages"]]
-    package = args.package or names[0]
-    if package not in names:
-        fail(f"{package} is not a package of this project ({', '.join(names)})")
-    entry = next(p for p in lock_data["packages"] if p["name"] == package)
+        fail(f"no {lock_path}; run `opam-purifier lock` first")
     (root / STATE_DIR).mkdir(exist_ok=True)
-    link = root / STATE_DIR / f"release-{package}"
-    run(
-        [
-            "nix-build",
-            f"{lib}/release.nix",
-            "--arg", "src", str(root),
-            "--argstr", "name", package,
-            "--argstr", "version", entry["version"],
-            "--arg", "nixpkgs", nixpkgs,
-            "--out-link", str(link),
-        ],
-        capture=True,
-    )
+    link = root / STATE_DIR / "release"
+    run(nix_build(root, lock_path, "release", ["--out-link", str(link)]), capture=True)
     archive = next(link.resolve().iterdir())
     data = archive.read_bytes()
     sha256 = hashlib.sha256(data).hexdigest()
@@ -1074,24 +1042,33 @@ def publish(root, args):
         served = response.read()
     if served != data:
         fail(f"{args.url} serves different bytes from the archive Nix built")
-    opam_text = (root / entry["opamFile"]).read_text()
-    opam_text = re.sub(r"(?ms)^url\s*\{.*?\}\s*", "", opam_text).rstrip() + (
-        f'\nurl {{\n  src: "{args.url}"\n  checksum: [\n'
-        f'    "sha256={sha256}"\n    "sha512={sha512}"\n  ]\n}}\n'
-    )
+    # Every package of the project is released from the one archive.
+    opam_texts = {}
+    for entry in lock_data["packages"]:
+        opam_text = (root / entry["opamFile"]).read_text()
+        opam_texts[entry["name"]] = re.sub(r"(?ms)^url\s*\{.*?\}\s*", "", opam_text).rstrip() + (
+            f'\nurl {{\n  src: "{args.url}"\n  checksum: [\n'
+            f'    "sha256={sha256}"\n    "sha512={sha512}"\n  ]\n}}\n'
+        )
     if args.repository:
-        target = pathlib.Path(args.repository) / "packages" / package / f"{package}.{entry['version']}" / "opam"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(opam_text)
-        print(f"opam-purifier: wrote {target}; commit it and open a pull request on the repository")
+        for entry in lock_data["packages"]:
+            name = entry["name"]
+            target = pathlib.Path(args.repository) / "packages" / name / f"{name}.{entry['version']}" / "opam"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(opam_texts[name])
+            print(f"opam-purifier: wrote {target}")
+        print("opam-purifier: commit the opam files and open a pull request on the repository")
         return
     publisher = os.environ.get("OPAM_PURIFIER_OPAM_PUBLISH", "opam-publish")
     if shutil.which(publisher) is None:
-        fail(f"{publisher} is not on PATH; pass --repository PATH to write the opam file into a checkout of the repository")
+        fail(f"{publisher} is not on PATH; pass --repository PATH to write the opam files into a checkout of the repository")
     with tempfile.TemporaryDirectory() as tmp:
-        opam_file = pathlib.Path(tmp) / f"{package}.opam"
-        opam_file.write_text(opam_text)
-        run([publisher, args.url, str(opam_file)])
+        files = []
+        for name, text in opam_texts.items():
+            opam_file = pathlib.Path(tmp) / f"{name}.opam"
+            opam_file.write_text(text)
+            files.append(str(opam_file))
+        run([publisher, args.url, *files])
 
 
 # ---------------------------------------------------------------------------
@@ -1101,43 +1078,49 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "fetch":
         fetch(sys.argv[2], sys.argv[3])
         return
-    if len(sys.argv) > 1 and sys.argv[1] == "opam":
-        opam_command(pathlib.Path.cwd(), sys.argv[2:])
-        return
     parser = argparse.ArgumentParser(prog="opam-purifier")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("lock", "relock"):
-        p = sub.add_parser(name)
-        p.add_argument(
-            "--repo",
-            action="append",
-            help="NAME=URL of a repository to resolve from; archive+URL names an archive of one",
-        )
-        p.add_argument(
-            "--only",
-            action="append",
-            help="a package of the project to lock; the default is every package with an opam file",
-        )
-        p.add_argument(
-            "--tool",
-            action="append",
-            help="a package to lock for the interactive mode only, such as ocaml-lsp-server",
-        )
-        p.add_argument("--without-test", action="store_true", help="leave out test dependencies")
-        p.add_argument("--with-doc", action="store_true", help="lock documentation dependencies too")
-    sub.add_parser("install")
-    p = sub.add_parser("publish")
-    p.add_argument("package", nargs="?")
+    commands = {}
+    p = commands["lock"] = sub.add_parser("lock", help="solve the project and record every download")
+    p.add_argument(
+        "--repo",
+        action="append",
+        help="NAME=URL of a repository to resolve from; archive+URL names an archive of one",
+    )
+    p.add_argument(
+        "--only",
+        action="append",
+        help="a package of the project to lock; the default is every package with an opam file",
+    )
+    p.add_argument(
+        "--tool",
+        action="append",
+        help="a package for the everyday loop only, such as ocaml-lsp-server",
+    )
+    p.add_argument("--without-test", action="store_true", help="leave out test dependencies")
+    p.add_argument("--with-doc", action="store_true", help="lock documentation dependencies too")
+    commands["prefetch"] = sub.add_parser(
+        "prefetch", help="realize what the everyday loop and the editor need, and set up _opam"
+    )
+    p = commands["publish"] = sub.add_parser(
+        "publish", help="build the release archive and submit the opam files that point at it"
+    )
     p.add_argument("--url", help="where the release archive is served")
-    p.add_argument("--repository", help="a checkout of the opam repository to write the opam file into")
+    p.add_argument("--repository", help="a checkout of the opam repository to write the opam files into")
+    for p in commands.values():
+        p.add_argument(
+            "--lockfile",
+            help=f"the lockfile to write or read; the default is {LOCK_FILE} in the current directory",
+        )
     args = parser.parse_args()
     root = pathlib.Path.cwd()
-    if args.command in ("lock", "relock"):
-        lock(root, args, force=args.command == "relock")
-    elif args.command == "install":
-        install(root)
+    lock_path = pathlib.Path(args.lockfile).resolve() if args.lockfile else root / LOCK_FILE
+    if args.command == "lock":
+        lock(root, lock_path, args)
+    elif args.command == "prefetch":
+        prefetch(root, lock_path)
     elif args.command == "publish":
-        publish(root, args)
+        publish(root, lock_path, args)
 
 
 if __name__ == "__main__":

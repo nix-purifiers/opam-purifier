@@ -57,7 +57,8 @@
           {
             checks = import ../../../tests {
               inherit pkgs;
-              overlay = self.overlays.default;
+              inherit (self.lib.opam-purifier) buildOpamProject;
+              inherit (self.lib) purifier;
               inherit (self.packages.${system}) cli;
             };
             treefmt.programs.nixfmt.enable = true;

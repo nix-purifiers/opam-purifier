@@ -169,7 +169,7 @@ class HashTest(unittest.TestCase):
     def test_write_lock_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            op.write_lock(root, {"version": 1, "packages": []})
+            op.write_lock(root / op.LOCK_FILE, {"version": 1, "packages": []})
             data = json.loads((root / op.LOCK_FILE).read_text())
             self.assertEqual(data["lockHash"], op.lock_hash(data))
 

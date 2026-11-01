@@ -1,10 +1,14 @@
 # SPDX-License-Identifier: MIT
 #
-# Runs on x86_64-linux and aarch64-linux: the flake's checks (the CLI
-# build, the sandboxed builds of the fixtures under tests/fixtures from
-# their lockfiles and a run of what they build, and the formatting), then
-# tests/interactive.sh for what runs outside the sandbox (the lock run,
-# the interactive mode, publishing and Darcs sources).
+# Runs on x86_64-linux and aarch64-linux. The `check` job runs the flake's
+# checks: the CLI build, the sandboxed builds of the fixtures and of
+# ocaml-uri from their lockfiles with a run of what they build, the
+# conformance checks the sandbox can run, and the formatting. The
+# conformance checks that need the network or a second build run as jobs
+# of the same name, from tests/interactive.sh, and the `integration` job
+# runs the rest of that script: the lock run against opam's own lock
+# files, publishing, the CLI's failures, and the git, Darcs and Mercurial
+# sources.
 name: check
 
 on:
@@ -27,4 +31,24 @@ jobs:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
       - run: nix flake check -L
-      - run: tests/interactive.sh
+
+  interactive:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+        section:
+          - conformance-relock
+          - conformance-offline
+          - conformance-rebuild
+          - integration
+    name: ${{ matrix.section }} (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - if: matrix.section != 'integration'
+        run: tests/interactive.sh ${{ matrix.section }}
+      - if: matrix.section == 'integration'
+        run: tests/interactive.sh lockfiles publish negative repository darcs hg

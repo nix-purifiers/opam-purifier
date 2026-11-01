@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
 #
 # The opam-purifier command: bin/opam-purifier on nixpkgs' Python, with
-# the Nix library it builds lockfiles with and the nixpkgs those builds
-# use. The lock run needs opam and what opam runs to fetch and unpack
+# the Nix library it builds with, the purifier library that library
+# fetches through, and the nixpkgs those builds use. The lock run needs opam and what opam runs to fetch and unpack
 # sources; the user's PATH comes first, for the user's nix.
 {
   lib,
@@ -27,7 +27,17 @@
   which,
   path,
   version,
+  # The source of the shared purifier library, which the default package
+  # overlay passes.
+  purifierSource,
 }:
+let
+  library =
+    if purifierSource == null then
+      throw "opam-purifier: the cli package needs the source of the purifier library; take it from the flake's package overlay"
+    else
+      purifierSource;
+in
 stdenvNoCC.mkDerivation {
   pname = "opam-purifier";
   inherit version;
@@ -43,6 +53,7 @@ stdenvNoCC.mkDerivation {
       --set OPAM_PURIFIER_SELF "$out/bin/opam-purifier" \
       --set OPAM_PURIFIER_LIB ${../../nix/lib} \
       --set OPAM_PURIFIER_NIXPKGS ${path} \
+      --set OPAM_PURIFIER_PURIFIER ${library} \
       --suffix PATH : ${
         lib.makeBinPath [
           opam

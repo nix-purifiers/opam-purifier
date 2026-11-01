@@ -1,10 +1,8 @@
 # SPDX-License-Identifier: MIT
 #
 # The offline state of a lockfile for one system: everything opam reads,
-# so that it installs the locked packages with no network. It is a
-# package for callPackage, with the lockfile and the system among its
-# arguments. Both the sandboxed build and the interactive mode
-# (`opam-purifier install`) use it.
+# so that it installs the locked packages with no network. Both the
+# sandboxed build and `opam-purifier prefetch` use it.
 #
 # The state directory holds
 #
@@ -20,40 +18,35 @@
 #   bin/install-dependencies PREFIX
 #                      sets up the opam root at $OPAMROOT, creates the
 #                      switch at PREFIX and installs the locked packages
+#   loop-bin/opam      the opam of the everyday loop, which names
+#                      `opam-purifier lock` when an install fails
 {
-  lib,
-  runCommand,
-  writeText,
-  fetchgit,
-  fetchhg,
-  fetchdarcs,
-  bash,
-  lockFile,
+  pkgs,
+  purifier,
+  lock,
   system,
-  # Replaces the built-in fetcher for files; see fetch.nix.
-  fetchurl ? null,
+  # Passed to fetchEntry and tree of the purifier library.
+  fetchers,
 }:
 let
-  lock = import ./lock.nix { inherit lockFile; };
-  fetch = import ./fetch.nix {
-    inherit
-      lock
-      fetchgit
-      fetchhg
-      fetchdarcs
-      writeText
-      fetchurl
-      ;
-  };
+  inherit (pkgs) lib writeText bash;
   solution = lock.forSystem system;
+
+  fetch = purifier.fetchEntry ({ inherit pkgs; } // fetchers);
+
+  # Every download at its path: the download cache and the checkouts.
+  downloads = purifier.tree (
+    {
+      inherit pkgs;
+      name = "opam-purifier-downloads";
+      entries = lock.downloads;
+    }
+    // fetchers
+  );
 
   repositoryFiles = lib.concatMapStrings (
     entry: "${entry.path}\t${writeText (lock.storeName (baseNameOf entry.path)) entry.contents}\n"
   ) lock.repository;
-
-  cacheFiles = lib.concatMapStrings (download: "${download.path}\t${fetch download}\n") lock.files;
-
-  checkouts = lib.concatMapStrings (download: "${download.path}\t${fetch download}\n") lock.checkouts;
 
   # Every URL a file can be asked for: its upstream URL and its mirrors,
   # among them opam's own cache.
@@ -102,6 +95,23 @@ let
     done < @state@/fetch-manifest
     echo "opam-purifier: $url is not in the lockfile; run \`opam-purifier lock\`" >&2
     exit 1
+  '';
+
+  loopOpam = ''
+    #!${bash}/bin/bash
+    # opam, on the root that `opam-purifier prefetch` set up. That root has
+    # only the locked packages, so an install of anything else fails.
+    if ${pkgs.opam}/bin/opam "$@"; then
+      exit 0
+    else
+      status=$?
+    fi
+    case "''${1:-}" in
+      install | upgrade | reinstall | pin)
+        echo "opam-purifier: opam installs only what the lockfile holds. To add a dependency, add it to the opam file, then run \`opam-purifier lock\` and \`opam-purifier prefetch\`. For an editor or another tool, run \`opam-purifier lock --tool PACKAGE\`." >&2
+        ;;
+    esac
+    exit "$status"
   '';
 
   patchShebangs = ''
@@ -169,54 +179,46 @@ let
     fi
   '';
 in
-runCommand "opam-purifier-state"
+pkgs.runCommand "opam-purifier-state"
   {
     inherit
       repositoryFiles
-      cacheFiles
-      checkouts
       fetchManifest
       offlineFetch
       patchShebangs
       installDependencies
+      loopOpam
       ;
     passAsFile = [
       "repositoryFiles"
-      "cacheFiles"
-      "checkouts"
       "fetchManifest"
       "offlineFetch"
       "patchShebangs"
       "installDependencies"
+      "loopOpam"
     ];
     preferLocalBuild = true;
     allowSubstitutes = false;
     passthru = {
-      inherit lock solution;
+      inherit lock solution downloads;
     };
   }
   ''
-    mkdir -p $out/repository $out/download-cache $out/sources $out/bin
+    mkdir -p $out/repository $out/download-cache $out/sources $out/bin $out/loop-bin
     echo 'opam-version: "2.0"' > $out/repository/repo
     while IFS=$'\t' read -r rel target; do
       mkdir -p "$(dirname "$out/repository/$rel")"
       cp "$target" "$out/repository/$rel"
     done < "$repositoryFilesPath"
-    while IFS=$'\t' read -r rel target; do
-      case "$rel" in
-        download-cache/*)
-          mkdir -p "$(dirname "$out/$rel")"
-          ln -s "$target" "$out/$rel"
-          ;;
-      esac
-    done < "$cacheFilesPath"
-    while IFS=$'\t' read -r rel target; do
-      mkdir -p "$(dirname "$out/$rel")"
-      ln -s "$target" "$out/$rel"
-    done < "$checkoutsPath"
+    for dir in download-cache sources; do
+      if [ -d ${downloads}/$dir ]; then
+        cp -r ${downloads}/$dir/. $out/$dir/
+      fi
+    done
     cp "$fetchManifestPath" $out/fetch-manifest
     substitute "$offlineFetchPath" $out/bin/offline-fetch --subst-var-by state $out
     cp "$patchShebangsPath" $out/bin/patch-shebangs
     substitute "$installDependenciesPath" $out/bin/install-dependencies --subst-var-by state $out
-    chmod +x $out/bin/*
+    cp "$loopOpamPath" $out/loop-bin/opam
+    chmod +x $out/bin/* $out/loop-bin/*
   ''
