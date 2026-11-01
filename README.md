@@ -160,9 +160,8 @@ garbage-collector roots under `.opam-purifier`, beside the lockfile:
   and what it runs to unpack sources, and the system packages the depexts
   name.
 
-The `conformance-offline` check cuts the network off in a network
-namespace and runs `dune build`, `dune test` and a program from the
-`hello` fixture, for x86_64-linux and aarch64-linux in CI.
+Anything the lockfile does not hold stays unavailable offline. A command
+that needs it stops with a message that names `opam-purifier lock`.
 
 ## 4. Editor
 
@@ -229,31 +228,63 @@ Limits:
   import-from-derivation. That fetch does not go through `fetchers`, and it
   needs network access, or a store that already holds the repository, at
   evaluation. A repository kept as copied files has no such fetch.
-- **opam files are parsed twice.** The command and Nix each parse the
-  `url` and `extra-source` sections of an opam file, because the lockfile
-  keeps no entry for a source that its opam file already describes. The
-  `parser-agrees` check compares the two parsers on every opam file of the
-  fixtures and of ocaml-uri.
 
 ## 7. Examples
 
-CI locks and builds the projects below. They are examples of opam-purifier
-at work, not a list of the projects it has been tried on or works with.
+### ocaml-uri
 
-| Project | Pinned at | What runs |
-|---|---|---|
-| [mirage/ocaml-uri](https://github.com/mirage/ocaml-uri) | v4.4.0 (`c336c79`) | `lock --only uri --only uri-re --only uri-sexp` against opam-repository at `2ffc351`, with the lockfile kept outside the source in `tests/real-world/uri`; `nix flake check` builds `uri`, `uri-re` and `uri-sexp` in the sandbox with their tests, including the test in the `fuzz` directory of `uri-re`, which uses `uri` and `crowbar` without declaring them |
+[ocaml-uri](https://github.com/mirage/ocaml-uri) is a library for parsing
+URIs. It is not your project, so the lockfile lives in a flake of your own
+that packages it. Lock it from a checkout, and write the lockfile beside
+the flake:
 
-The `hello` and `workspace` fixtures under `tests/fixtures` cover the rest:
-a library, an executable and a test on repository archives, local packages
-that depend on each other, a git pin and a URL pin without a checksum. The
-`tests/interactive.sh` script also locks and builds a custom git
-repository, Darcs pins by tag and by context, and a Mercurial pin, each
-from repositories the script makes and serves itself. CI runs all of it on
-x86_64-linux and aarch64-linux.
+```zsh
+git clone --branch v4.4.0 https://github.com/mirage/ocaml-uri
+cd ocaml-uri
+nix run github:nix-purifiers/opam-purifier -- lock \
+  --only uri --only uri-re --only uri-sexp \
+  --lockfile ../uri.lock.json
+```
 
-The everyday loop (`prefetch`, `dune build`, `dune test`, the editor tools)
-runs on the `hello` fixture in CI. It has not run on ocaml-uri.
+The repository also holds a benchmark package, `uri-bench`. `--only` locks
+the three library packages and leaves it out.
+
+The flake takes the source from GitHub and the lockfile from beside it:
+
+```nix
+{
+  inputs.opam-purifier.url = "github:nix-purifiers/opam-purifier";
+  inputs.nixpkgs.follows = "opam-purifier/nixpkgs";
+  inputs.uri = {
+    url = "github:mirage/ocaml-uri/v4.4.0";
+    flake = false;
+  };
+
+  outputs =
+    { nixpkgs, opam-purifier, uri, ... }:
+    let
+      pkgs = nixpkgs.legacyPackages.x86_64-linux;
+      project = opam-purifier.lib.opam-purifier.buildOpamProject {
+        inherit pkgs;
+        src = uri;
+        lockFile = ./uri.lock.json;
+      };
+    in
+    {
+      packages.x86_64-linux = {
+        inherit (project.packages) uri uri-re uri-sexp;
+      };
+      checks.x86_64-linux.tests = project.tests;
+    };
+}
+```
+
+`nix build .#uri` builds the library, and `nix flake check` builds all
+three packages with their tests. To change the version, change the tag in
+the flake and in the `git clone`, and run the `lock` command again.
+
+For a project of your own, run the Quickstart in its checkout instead, and
+leave out `--lockfile` so that the lockfile sits next to the opam files.
 
 ## 8. Credits
 
