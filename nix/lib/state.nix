@@ -18,7 +18,7 @@
 #   bin/install-dependencies PREFIX
 #                      sets up the opam root at $OPAMROOT, creates the
 #                      switch at PREFIX and installs the locked packages
-#   loop-bin/opam      the opam of the everyday loop, which names
+#   loop-bin/opam      the opam of the development loop, which names
 #                      `opam-purifier lock` when an install fails
 {
   pkgs,

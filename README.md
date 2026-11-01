@@ -22,7 +22,9 @@ and aarch64-linux), solves the project's dependencies with that system's
 platform variables, and records the result. It then builds the project in
 the Nix sandbox, with its tests, to record the files each package installs.
 
-Build the project from a flake:
+The flake's `overlays.default` adds the builder `buildOpamProject` to the
+package set, where nixpkgs keeps its own builders. Build the project from a
+flake:
 
 ```nix
 {
@@ -32,11 +34,8 @@ Build the project from a flake:
   outputs =
     { nixpkgs, opam-purifier, ... }:
     let
-      pkgs = nixpkgs.legacyPackages.x86_64-linux;
-      project = opam-purifier.lib.opam-purifier.buildOpamProject {
-        inherit pkgs;
-        src = ./.;
-      };
+      pkgs = nixpkgs.legacyPackages.x86_64-linux.extend opam-purifier.overlays.default;
+      project = pkgs.buildOpamProject { src = ./.; };
     in
     {
       packages.x86_64-linux.default = project.packages.hello;
@@ -45,7 +44,16 @@ Build the project from a flake:
 }
 ```
 
-The builder takes `pkgs`, `src`, `lockFile` (the default is
+A package in your own overlay takes the builder by name, like any other
+builder, and `buildOpamProject.override` replaces what the builder takes
+from the package set:
+
+```nix
+# hello.nix
+{ buildOpamProject }: (buildOpamProject { src = ./.; }).packages.hello
+```
+
+The builder takes `src`, `lockFile` (the default is
 `opam-purifier.lock.json` in `src`), `fetchers`, `name`, `releasePackage`,
 `nativeBuildInputs`, `buildInputs` (for libraries that the depexts of the
 locked packages do not name) and `srcFilter`. `nix/lib/project.nix`
@@ -66,7 +74,7 @@ The compiler is the one the solution holds. opam usually picks
 `ocaml-base-compiler`, and the build compiles it from source, offline, from
 the locked archive.
 
-## 2. Everyday loop
+## 2. Development loop
 
 ```zsh
 opam-purifier prefetch
@@ -118,7 +126,7 @@ locked versions. When the project has opam lock files (`*.opam.locked`),
 - `--only PACKAGE`, once per package, to lock some of the project's packages
   and leave the others out, such as a benchmark package with heavy
   dependencies. The default is every package with an opam file.
-- `--tool PACKAGE`, once per package, to lock a tool for the everyday loop
+- `--tool PACKAGE`, once per package, to lock a tool for the development loop
   only; see the Editor section.
 - `--without-test` and `--with-test` choose whether the test dependencies
   are locked, which they are by default. `--with-doc` and `--without-doc`
@@ -147,9 +155,9 @@ package of the project, and writes them into a checkout of the target
 repository (`--repository`), for a pull request. Without `--repository`, it
 hands the URL and the opam files to `opam-publish`.
 
-## 3. Offline work
+## 3. Working offline
 
-After `prefetch`, the everyday loop works with the network cut off.
+After `prefetch`, the development loop works with the network cut off.
 `prefetch` puts the following in the Nix store, and keeps it there with
 garbage-collector roots under `.opam-purifier`, beside the lockfile:
 
@@ -178,7 +186,7 @@ versions, and the Nix build leaves them out. `prefetch` installs them into
 `ocamlformat` on `PATH`. Start the editor from that environment, or from
 direnv. The server runs offline.
 
-## 5. Errors and fixes
+## 5. Troubleshooting
 
 The commands and the Nix library fail with a message that names the fix.
 
@@ -190,11 +198,11 @@ The commands and the Nix library fail with a message that names the fix.
 | The lockfile does not exist | `does not exist; run `opam-purifier lock` in the project, and add the lockfile to the repository`. |
 | The lockfile has another format version | `has lock format version N; this library reads version M`. Run `opam-purifier lock` with the matching version. |
 | opam asks for a file the lockfile does not hold | `<url> is not in the lockfile; run `opam-purifier lock``. |
-| `opam install` of an unlocked package in the everyday loop | `opam installs only what the lockfile holds`, with the steps to add a dependency or a tool. |
+| `opam install` of an unlocked package in the development loop | `opam installs only what the lockfile holds`, with the steps to add a dependency or a tool. |
 | A download does not match its locked hash | the build fails with Nix's hash mismatch error. |
 | A package installs other files on the other system | the build fails and names the missing file; run `opam-purifier lock` on that system. |
 
-## 6. Sources supported and refused
+## 6. Supported language repositories
 
 | Source | How the lock keeps it |
 |---|---|
@@ -207,12 +215,12 @@ The commands and the Nix library fail with a message that names the fix.
 | a repository as `archive+URL` or `git+URL#REF` | its URL and hash, or its commit; Nix fetches it at evaluation and reads the opam files from it |
 | any other repository | a copy of the opam files of the packages solved from it |
 
-Refused:
+Not supported:
 
-- A `pin-depends` path outside the project stops the lock run, since the
-  sandbox cannot see it. Move the package into the project or pin it by URL.
+- A `pin-depends` path outside the project. The sandbox cannot see it, so
+  the lock run stops. Move the package into the project or pin it by URL.
 - Subversion, Bazaar, Fossil, Pijul and CVS sources of opam packages. The
-  library fetches them, but the lock run does not read them yet.
+  lock run reads git, Mercurial and Darcs sources.
 
 Limits:
 
@@ -263,9 +271,8 @@ The flake takes the source from GitHub and the lockfile from beside it:
   outputs =
     { nixpkgs, opam-purifier, uri, ... }:
     let
-      pkgs = nixpkgs.legacyPackages.x86_64-linux;
-      project = opam-purifier.lib.opam-purifier.buildOpamProject {
-        inherit pkgs;
+      pkgs = nixpkgs.legacyPackages.x86_64-linux.extend opam-purifier.overlays.default;
+      project = pkgs.buildOpamProject {
         src = uri;
         lockFile = ./uri.lock.json;
       };

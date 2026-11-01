@@ -11,7 +11,7 @@
 #                            commit its ref names now, for every package or
 #                            the ones named; it also writes opam's own lock
 #                            files (*.opam.locked) when the project has them
-#   opam-purifier prefetch   realize what the everyday loop and the editor
+#   opam-purifier prefetch   realize what the development loop and the editor
 #                            need, and set up the local switch _opam
 #   opam-purifier publish    build the release archive with Nix and submit
 #                            the opam files that point at it
@@ -994,7 +994,7 @@ def lock(root, lock_path, args, update=None):
         for path in locked_files:
             written = opam_locked / path.name
             if not written.is_file():
-                fail(f"the build wrote no {path.name}; run `opam lock` in the everyday loop, then `opam-purifier lock`")
+                fail(f"the build wrote no {path.name}; run `opam lock` in the development loop, then `opam-purifier lock`")
             path.write_text(written.read_text())
             print(f"opam-purifier: wrote {path.name}")
         # The lock files changed, so the lock is made again against them,
@@ -1055,7 +1055,7 @@ def nix_build(root, lock_path, attr, extra):
 
 
 ENV_SCRIPT = """\
-# The environment of the everyday loop, which `opam-purifier prefetch`
+# The environment of the development loop, which `opam-purifier prefetch`
 # writes. Source it from bash, or from an .envrc for direnv:
 #
 #   source .opam-purifier/env.sh
@@ -1075,7 +1075,7 @@ export PATH={state}/loop-bin:"$PATH"
 
 def prefetch(root, lock_path):
     """Realizes, with garbage-collector roots under .opam-purifier, what
-    the everyday loop needs: the offline state (the repository, the
+    the development loop needs: the offline state (the repository, the
     downloads and the tools' downloads), and the environment of the
     sandboxed build. It then sets up the local switch _opam from them, and
     writes .opam-purifier/env.sh."""
@@ -1214,7 +1214,7 @@ def main():
     p.add_argument(
         "--tool",
         action="append",
-        help="a package for the everyday loop only, such as ocaml-lsp-server",
+        help="a package for the development loop only, such as ocaml-lsp-server",
     )
     p.add_argument(
         "--with-test",
@@ -1233,7 +1233,7 @@ def main():
     )
     p.add_argument("packages", nargs="*", help="the packages to update; the default is every package")
     commands["prefetch"] = sub.add_parser(
-        "prefetch", help="realize what the everyday loop and the editor need, and set up _opam"
+        "prefetch", help="realize what the development loop and the editor need, and set up _opam"
     )
     p = commands["publish"] = sub.add_parser(
         "publish", help="build the release archive and submit the opam files that point at it"

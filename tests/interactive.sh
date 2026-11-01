@@ -81,8 +81,8 @@ build() {
   local src="$1" attr="$2"
   nix build --no-link --print-out-paths --impure --expr "
     let flake = builtins.getFlake \"git+file://$root\";
-        pkgs = flake.inputs.nixpkgs.legacyPackages.\${builtins.currentSystem};
-    in (flake.lib.opam-purifier.buildOpamProject { inherit pkgs; src = $src; }).$attr"
+        pkgs = flake.inputs.nixpkgs.legacyPackages.\${builtins.currentSystem}.extend flake.overlays.default;
+    in (pkgs.buildOpamProject { src = $src; }).$attr"
 }
 
 # Runs a command with the network cut off: in a new network namespace,
@@ -96,7 +96,7 @@ offline() {
   fi
 }
 
-# Runs a script in the environment of the everyday loop of a project.
+# Runs a script in the environment of the development loop of a project.
 in_env() {
   local dir="$1" script="$2"
   bash -c "
@@ -106,7 +106,7 @@ in_env() {
     $script"
 }
 
-# Runs a script in the environment of the everyday loop of a project,
+# Runs a script in the environment of the development loop of a project,
 # with the network cut off.
 in_loop() {
   local dir="$1" script="$2"
@@ -252,7 +252,7 @@ section_conformance-offline() {
     [ "$(./_build/default/bin/main.exe)" = "Hello, Nix!" ]
     dune test'
   expect_failure 'opam-purifier lock --tool' in_loop "$dir" 'opam install --yes cmdliner'
-  # A tool locked for the everyday loop is installed by prefetch, and the
+  # A tool locked for the development loop is installed by prefetch, and the
   # sandboxed build leaves it out.
   (cd "$dir" && "$cli" lock --tool cmdliner)
   "$python" - "$dir/opam-purifier.lock.json" <<'EOF'

@@ -14,7 +14,7 @@
 #   release   the source archive that `opam-purifier publish` submits
 #   fetches   the download entries of the lockfile
 #   state     the offline state the switch installs from (state.nix)
-#   shell     the environment of the everyday loop: the tools of the
+#   shell     the environment of the development loop: the tools of the
 #             sandboxed build and the system packages the depexts name
 { purifier }:
 {

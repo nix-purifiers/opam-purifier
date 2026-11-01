@@ -7,7 +7,8 @@
 # what runs outside the sandbox: the lock run, `prefetch` and `publish`.
 {
   pkgs,
-  buildOpamProject,
+  # The flake's default package overlay, which adds buildOpamProject.
+  overlay,
   readLock,
   # The purifier library, for the check that builds the internals of
   # project.nix.
@@ -16,7 +17,8 @@
 }:
 let
   inherit (pkgs) lib runCommand;
-  build = args: buildOpamProject ({ inherit pkgs; } // args);
+  pkgs' = pkgs.extend overlay;
+  build = args: pkgs'.buildOpamProject args;
 
   hello = build { src = ./fixtures/hello; };
   workspace = build { src = ./fixtures/workspace; };

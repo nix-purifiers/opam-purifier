@@ -57,7 +57,8 @@
           {
             checks = import ../../../tests {
               inherit pkgs;
-              inherit (self.lib.opam-purifier) buildOpamProject readLock;
+              overlay = self.overlays.default;
+              inherit (self.lib.opam-purifier) readLock;
               inherit (self.lib) purifier;
               inherit (self.packages.${system}) cli;
             };
