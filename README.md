@@ -112,9 +112,19 @@ opam-purifier update fmt cmdliner
 so a relock of an unchanged project writes the lockfile byte for byte.
 `update` moves each git repository to the commit its ref names now, for all
 packages or the ones named, and the packages it leaves alone stay at their
-locked versions. When the project has opam lock files (`*.opam.locked`),
-`lock` solves with `--locked` so that opam decides the versions, and
-`update` writes the lock files again from the build.
+locked versions.
+
+opam's own lock files (`*.opam.locked`) record package versions and no
+download URLs or hashes, so `opam-purifier.lock.json` records the rest. When
+the project has opam lock files, `lock` solves with `--locked` so that
+opam decides the versions, and `update` writes the lock files again from
+the build. `lock` does not create an opam lock file that is missing. A
+project without one gets its versions from the solution that `lock`
+records in `opam-purifier.lock.json`.
+
+opam runs plugins as `opam-<name>` executables. opam-purifier is a
+standalone command instead, because `lock` runs opam in an empty opam root
+of its own, apart from the one you work in.
 
 `lock` takes these options, and remembers them for the next run:
 
