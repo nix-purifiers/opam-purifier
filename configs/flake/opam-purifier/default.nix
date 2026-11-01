@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-{ ... }:
+{ closure-lib, ... }:
 {
   config,
   inputs,
@@ -8,29 +8,30 @@
 }:
 {
 
-  imports = [ inputs.flake-parts.flakeModules.partitions ];
+  imports = [
+    inputs.flake-parts.flakeModules.partitions
+    closure-lib.caisson.modules.flake."purifier/purifier-packages"
+  ];
 
   debug = false;
   caisson = {
     libOverlays.exported = libOverlays: {
       inherit (libOverlays) default;
     };
-
-    # The packages are the `default` entry of this flake's package overlay
-    # registry (pkg-overlays/): the package set applies it by default, and
-    # the flake exports it as `pkgOverlays` and as the plain
-    # `overlays.default`.
-    nixpkgs = {
-      packages.export.enabled = true;
-    };
   };
+
+  # The scope is the `default` entry of this flake's package overlay
+  # registry (pkg-overlays/). The `packages` output holds the derivations
+  # of the scope, because the scope also holds the builder, which is a
+  # function.
+  purifier.scope = "opam-purifier";
 
   # `nix run github:nix-purifiers/opam-purifier -- lock` locks the project
   # in the current directory.
   perSystem =
     { config, ... }:
     {
-      packages.default = config.packages.cli;
+      packages.default = config.packages.opam-purifier;
     };
 
   partitionedAttrs.checks = "checks";
@@ -60,7 +61,7 @@
               overlay = self.overlays.default;
               inherit (self.lib.opam-purifier) readLock;
               inherit (self.lib) purifier;
-              inherit (self.packages.${system}) cli;
+              cli = self.packages.${system}.opam-purifier;
             };
             treefmt.programs.nixfmt.enable = true;
           };

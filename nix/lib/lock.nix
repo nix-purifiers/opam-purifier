@@ -8,7 +8,15 @@
 #             run; empty for a usable lockfile
 #   lock      the lockfile's content, with the helpers below; read it only
 #             when `problems` is empty
-{ lockFile, src }:
+#
+# opam's own lock files (<package>.opam.locked) are the build tool's
+# lockfiles. They are in `src` by default. `opamLocked`, a directory that
+# holds them, takes their place when the build is external.
+{
+  lockFile,
+  src,
+  opamLocked ? null,
+}:
 let
   exists = builtins.pathExists lockFile;
   text = builtins.readFile lockFile;
@@ -56,32 +64,33 @@ let
   intact =
     (lock.lockHash or null)
     == "sha256:${builtins.hashString "sha256" (builtins.toJSON (removeAttrs lock [ "lockHash" ]))}";
-  # Whether the lockfile was made from the opam files under `src`: the
-  # same manifest bin/opam-purifier hashes (definition_hash), with a line
-  # `<path>\t<sha256>` for each definition file and a line for the
-  # options. A lockfile written before an edit to an opam file is stale.
+  # Whether the lockfile was made from the opam files under `src` and the
+  # opam lock files: the same manifest bin/opam-purifier hashes
+  # (definition_hash), with a line `<path>\t<sha256>` for each definition
+  # file and a line for the options. A lockfile written before an edit to
+  # an opam file or an opam lock file is stale.
   isCurrent =
     let
+      lockedBase = if opamLocked != null then opamLocked else src;
+      # The matching files of a directory, as { name, file }: the name the
+      # manifest lists, and the path that holds the content.
       inDir =
-        dir: prefix:
+        base: dir: prefix: matches:
         let
-          entries = if builtins.pathExists (src + dir) then builtins.readDir (src + dir) else { };
-          names = builtins.filter (
-            n:
-            entries.${n} == "regular"
-            && (
-              n == "opam"
-              || builtins.match ".*\\.opam" n != null
-              || (prefix == "" && builtins.match ".*\\.opam\\.locked" n != null)
-            )
-          ) (builtins.attrNames entries);
+          entries = if builtins.pathExists (base + dir) then builtins.readDir (base + dir) else { };
+          names = builtins.filter (n: entries.${n} == "regular" && matches n) (builtins.attrNames entries);
         in
-        map (n: prefix + n) names;
-      files = builtins.sort builtins.lessThan (inDir "/" "" ++ inDir "/opam" "opam/");
+        map (n: {
+          name = prefix + n;
+          file = base + "${dir}/${n}";
+        }) names;
+      isOpam = n: n == "opam" || builtins.match ".*\\.opam" n != null;
+      isLocked = n: builtins.match ".*\\.opam\\.locked" n != null;
+      files = builtins.sort (a: b: a.name < b.name) (
+        inDir src "/" "" isOpam ++ inDir src "/opam" "opam/" isOpam ++ inDir lockedBase "/" "" isLocked
+      );
       manifest =
-        builtins.concatStringsSep "" (
-          map (f: "${f}\t${builtins.hashFile "sha256" (src + "/${f}")}\n") files
-        )
+        builtins.concatStringsSep "" (map (f: "${f.name}\t${builtins.hashFile "sha256" f.file}\n") files)
         + "options\t${builtins.toJSON lock.options}\n";
     in
     lock.definitionHash == "sha256:${builtins.hashString "sha256" manifest}";

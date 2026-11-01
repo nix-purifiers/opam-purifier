@@ -34,7 +34,7 @@
 let
   library =
     if purifierSource == null then
-      throw "opam-purifier: the cli package needs the source of the purifier library; take it from the flake's package overlay"
+      throw "opam-purifier: the opam-purifier package needs the source of the purifier library; take it from the flake's package overlay"
     else
       purifierSource;
 in

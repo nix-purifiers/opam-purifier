@@ -18,9 +18,11 @@
 {
   src,
   lockFile ? src + "/opam-purifier.lock.json",
+  # A directory that holds opam's lock files, in place of the ones in `src`.
+  opamLocked ? null,
 }:
 let
-  read = import ./lock.nix { inherit lockFile src; };
+  read = import ./lock.nix { inherit lockFile src opamLocked; };
   usable = read.problems == [ ];
 in
 {

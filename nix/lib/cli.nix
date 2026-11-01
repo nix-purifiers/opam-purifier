@@ -8,6 +8,8 @@
 {
   src,
   lockFile,
+  # A directory that holds opam's lock files, or null for the ones in `src`.
+  opamLocked ? null,
   # The nixpkgs the command was built with.
   nixpkgs,
   # The source of the purifier library the command was built with.
@@ -18,4 +20,11 @@ let
   pkgs = import nixpkgs { inherit system; };
   purifier = import purifierSource { inherit (pkgs) lib; };
 in
-import ./project.nix { inherit purifier; } { inherit pkgs src lockFile; }
+import ./project.nix { inherit purifier; } {
+  inherit
+    pkgs
+    src
+    lockFile
+    opamLocked
+    ;
+}

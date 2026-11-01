@@ -18,7 +18,7 @@
 let
   inherit (pkgs) lib runCommand;
   pkgs' = pkgs.extend overlay;
-  build = args: pkgs'.buildOpamProject args;
+  build = args: pkgs'.opam-purifier.buildOpamProject args;
 
   hello = build { src = ./fixtures/hello; };
   workspace = build { src = ./fixtures/workspace; };
@@ -41,7 +41,18 @@ let
     builtins.path {
       inherit path;
       name = "${baseNameOf path}-without-lockfile";
-      filter = p: type: baseNameOf p != "opam-purifier.lock.json";
+      filter =
+        p: type:
+        baseNameOf p != "opam-purifier.lock.json" && !(lib.hasSuffix ".opam.locked" (baseNameOf p));
+    };
+
+  # A directory that holds only the opam lock files of a project.
+  onlyOpamLocked =
+    path:
+    builtins.path {
+      inherit path;
+      name = "${baseNameOf path}-opam-locked";
+      filter = p: type: (type == "directory" && p == toString path) || lib.hasSuffix ".opam.locked" p;
     };
 
   # Evaluates the lockfile reader of the library on a lockfile and a
@@ -289,13 +300,14 @@ in
   # and fails when the second build differs.
   conformance-rebuild = hello.packages.hello.switch;
 
-  # hello, from a source that holds no lockfile and a lockfile kept
-  # outside it.
+  # hello, from a source that holds neither lockfile, with both kept
+  # outside it: the purifier lockfile and opam's lock files.
   conformance-external =
     let
       external = build {
         src = withoutLockfile ./fixtures/hello;
         lockFile = helloLock;
+        opamLocked = onlyOpamLocked ./fixtures/hello;
       };
     in
     runCommand "conformance-external" { } ''

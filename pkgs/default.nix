@@ -1,10 +1,18 @@
 # SPDX-License-Identifier: MIT
-{ callPackage, ... }:
+#
+# The `opam-purifier` scope that the default package overlay adds to the
+# package set. `lib` here is the library this flake composes, which holds
+# the purifier library.
+{ callPackage, lib, ... }:
 {
-  # The opam-purifier command.
-  # The default package overlay passes the source of the purifier library.
-  cli = callPackage ./cli {
-    purifierSource = null;
+  # The builder of the purifier contract (nix/lib/build-opam-project.nix).
+  buildOpamProject = callPackage ../nix/lib/build-opam-project.nix {
+    inherit (lib) purifier;
+  };
+  # The `opam-purifier` command. It builds outside a flake with the source
+  # of the purifier library, which the default package overlay passes.
+  opam-purifier = callPackage ./opam-purifier {
     version = builtins.replaceStrings [ "\n" ] [ "" ] (builtins.readFile ../version.txt);
+    purifierSource = null;
   };
 }

@@ -17,14 +17,18 @@ nix run github:nix-purifiers/opam-purifier -- lock
 git add opam-purifier.lock.json
 ```
 
+We recommend committing `opam-purifier.lock.json` to the repository, and
+opam's own lock files (`*.opam.locked`) too when the project has them. The
+builder and the commands look for both in the project by default.
+
 `lock` runs opam in an empty opam root for each Nix system (x86_64-linux
 and aarch64-linux), solves the project's dependencies with that system's
 platform variables, and records the result. It then builds the project in
 the Nix sandbox, with its tests, to record the files each package installs.
 
-The flake's `overlays.default` adds the builder `buildOpamProject` to the
-package set, where nixpkgs keeps its own builders. Build the project from a
-flake:
+The flake's `overlays.default` adds one attribute to the package set, the
+scope `opam-purifier`. It holds the builder `buildOpamProject` and the
+command `opam-purifier`. Build the project from a flake:
 
 ```nix
 {
@@ -35,7 +39,7 @@ flake:
     { nixpkgs, opam-purifier, ... }:
     let
       pkgs = nixpkgs.legacyPackages.x86_64-linux.extend opam-purifier.overlays.default;
-      project = pkgs.buildOpamProject { src = ./.; };
+      project = pkgs.opam-purifier.buildOpamProject { src = ./.; };
     in
     {
       packages.x86_64-linux.default = project.packages.hello;
@@ -44,17 +48,20 @@ flake:
 }
 ```
 
-A package in your own overlay takes the builder by name, like any other
-builder, and `buildOpamProject.override` replaces what the builder takes
+A package in your own overlay takes the scope by name.
+`opam-purifier.overrideScope` replaces what the scope shares, and
+`opam-purifier.buildOpamProject.override` replaces what the builder takes
 from the package set:
 
 ```nix
 # hello.nix
-{ buildOpamProject }: (buildOpamProject { src = ./.; }).packages.hello
+{ opam-purifier }: (opam-purifier.buildOpamProject { src = ./.; }).packages.hello
 ```
 
 The builder takes `src`, `lockFile` (the default is
-`opam-purifier.lock.json` in `src`), `fetchers`, `name`, `releasePackage`,
+`opam-purifier.lock.json` in `src`), `opamLocked` (a directory that holds
+opam's lock files, in place of the ones in `src`), `fetchers`, `name`,
+`releasePackage`,
 `nativeBuildInputs`, `buildInputs` (for libraries that the depexts of the
 locked packages do not name) and `srcFilter`. `nix/lib/project.nix`
 documents each one. It returns:
@@ -142,14 +149,21 @@ of its own, apart from the one you work in.
   are locked, which they are by default. `--with-doc` and `--without-doc`
   do the same for the documentation dependencies.
 
-The lockfile can live outside the project. Every command takes
-`--lockfile PATH`, or reads the environment variable
-`OPAM_PURIFIER_LOCKFILE`, and the builder takes the same path as
-`lockFile`. A packaging flake can build a project whose author does not
-change it, with the lockfile kept in the packaging flake. Its dev shell can
-set the variable to the path it passes as `lockFile`. `prefetch` then keeps
-`.opam-purifier`, with the garbage-collector roots and `env.sh`, beside the
-lockfile.
+A build can keep both lockfiles outside the project. This suits a flake
+that packages a project whose author does not change it, and a project
+whose committed lockfiles are missing or stale. Every command takes
+`--lockfile PATH` for `opam-purifier.lock.json`, or reads the environment
+variable `OPAM_PURIFIER_LOCKFILE`, and the builder takes the same path as
+`lockFile`. For opam's lock files, every command takes
+`--tool-lockfile DIR`, or reads `OPAM_PURIFIER_TOOL_LOCKFILE`, and the
+builder takes the directory as `opamLocked`. With `--tool-lockfile`, `lock`
+and `update` write `*.opam.locked` into that directory and leave the copies
+in the project as they are, and `lock` starts from the copies in the
+project when the directory does not hold them yet. The dev shell of the
+packaging flake can set both variables to the paths it passes to the
+builder, so a developer in that shell runs the commands with no flag.
+`prefetch` keeps `.opam-purifier`, with the garbage-collector roots and
+`env.sh`, beside the lockfile.
 
 ### Publishing
 
@@ -252,20 +266,56 @@ Limits:
 ### ocaml-uri
 
 [ocaml-uri](https://github.com/mirage/ocaml-uri) is a library for parsing
-URIs. It is not your project, so the lockfile lives in a flake of your own
-that packages it. Lock it from a checkout, and write the lockfile beside
-the flake:
+URIs. In your checkout of it, lock the three library packages and commit
+the lockfile with the project:
 
 ```zsh
 git clone --branch v4.4.0 https://github.com/mirage/ocaml-uri
 cd ocaml-uri
 nix run github:nix-purifiers/opam-purifier -- lock \
-  --only uri --only uri-re --only uri-sexp \
-  --lockfile ../uri.lock.json
+  --only uri --only uri-re --only uri-sexp
+git add opam-purifier.lock.json
 ```
 
 The repository also holds a benchmark package, `uri-bench`. `--only` locks
 the three library packages and leaves it out.
+
+A `flake.nix` at the root of the checkout builds them:
+
+```nix
+{
+  inputs.opam-purifier.url = "github:nix-purifiers/opam-purifier";
+  inputs.nixpkgs.follows = "opam-purifier/nixpkgs";
+
+  outputs =
+    { nixpkgs, opam-purifier, ... }:
+    let
+      pkgs = nixpkgs.legacyPackages.x86_64-linux.extend opam-purifier.overlays.default;
+      project = pkgs.opam-purifier.buildOpamProject { src = ./.; };
+    in
+    {
+      packages.x86_64-linux = {
+        inherit (project.packages) uri uri-re uri-sexp;
+      };
+      checks.x86_64-linux.tests = project.tests;
+    };
+}
+```
+
+`nix build .#uri` builds the library, and `nix flake check` builds all
+three packages with their tests. To change the version, check out another
+tag and run the `lock` command again.
+
+### ocaml-uri from a packaging flake
+
+A flake of your own can package ocaml-uri without changing its repository.
+Lock it from a checkout, and write the lockfile beside the flake:
+
+```zsh
+nix run github:nix-purifiers/opam-purifier -- lock \
+  --only uri --only uri-re --only uri-sexp \
+  --lockfile ../uri.lock.json
+```
 
 The flake takes the source from GitHub and the lockfile from beside it:
 
@@ -282,7 +332,7 @@ The flake takes the source from GitHub and the lockfile from beside it:
     { nixpkgs, opam-purifier, uri, ... }:
     let
       pkgs = nixpkgs.legacyPackages.x86_64-linux.extend opam-purifier.overlays.default;
-      project = pkgs.buildOpamProject {
+      project = pkgs.opam-purifier.buildOpamProject {
         src = uri;
         lockFile = ./uri.lock.json;
       };
@@ -295,13 +345,6 @@ The flake takes the source from GitHub and the lockfile from beside it:
     };
 }
 ```
-
-`nix build .#uri` builds the library, and `nix flake check` builds all
-three packages with their tests. To change the version, change the tag in
-the flake and in the `git clone`, and run the `lock` command again.
-
-For a project of your own, run the Quickstart in its checkout instead, and
-leave out `--lockfile` so that the lockfile sits next to the opam files.
 
 ## 8. Credits
 

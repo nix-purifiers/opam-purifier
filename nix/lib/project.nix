@@ -24,6 +24,10 @@
   # The lockfile. It can live outside `src`, and the build then ignores
   # any copy of it in `src`.
   lockFile ? src + "/opam-purifier.lock.json",
+  # A directory that holds opam's lock files (<package>.opam.locked), which
+  # the build uses in place of the ones in `src`. An external build keeps
+  # them beside its own flake. The default is the ones in `src`.
+  opamLocked ? null,
   # Passed to fetchEntry and tree of the purifier library, such as a
   # `fetchurl` that sends credentials or tries a company mirror.
   fetchers ? { },
@@ -51,8 +55,10 @@ let
 
   # The lock in memory, checked by the purifier library, which fails
   # evaluation with the problems, each naming the command to run.
-  checked = purifier.checkLock (import ./read-lock.nix { inherit lib; } { inherit src lockFile; });
-  lock = builtins.seq checked (import ./lock.nix { inherit lockFile src; }).lock;
+  checked = purifier.checkLock (
+    import ./read-lock.nix { inherit lib; } { inherit src lockFile opamLocked; }
+  );
+  lock = builtins.seq checked (import ./lock.nix { inherit lockFile src opamLocked; }).lock;
   solution = lock.forSystem system;
   derived = import ./derive.nix { inherit lib lock; };
 

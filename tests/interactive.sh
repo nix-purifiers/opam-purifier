@@ -57,7 +57,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-cli="$(nix build --no-link --print-out-paths "$root#cli")/bin/opam-purifier"
+cli="$(nix build --no-link --print-out-paths "$root#opam-purifier")/bin/opam-purifier"
 python="$(nix build --no-link --print-out-paths 'nixpkgs#python3')/bin/python3"
 darcs="$(nix build --no-link --print-out-paths 'nixpkgs#darcs')/bin/darcs"
 hg="$(nix build --no-link --print-out-paths 'nixpkgs#mercurial')/bin/hg"
@@ -78,11 +78,11 @@ fixture() {
 # Builds an attribute of buildOpamProject for a project directory, with
 # the flake's library, and prints the store path.
 build() {
-  local src="$1" attr="$2"
+  local src="$1" attr="$2" arguments="${3:-}"
   nix build --no-link --print-out-paths --impure --expr "
     let flake = builtins.getFlake \"git+file://$root\";
         pkgs = flake.inputs.nixpkgs.legacyPackages.\${builtins.currentSystem}.extend flake.overlays.default;
-    in (pkgs.buildOpamProject { src = $src; }).$attr"
+    in (pkgs.opam-purifier.buildOpamProject { src = $src; $arguments }).$attr"
 }
 
 # Runs a command with the network cut off: in a new network namespace,
@@ -342,6 +342,21 @@ EOF
   cmp "$work/update-after.json" "$project/opam-purifier.lock.json"
   # A package that is not in the lockfile is refused.
   expect_failure 'nothing is not in' sh -c "cd '$project' && '$cli' update nothing"
+  # opam's lock files kept outside the tree. `lock` starts from the copy in
+  # the tree, `update` writes outside only, and the copy in the tree stays
+  # as it was. The build takes the directory as `opamLocked`.
+  local external="$work/update-external" outside="$work/up-locked"
+  cp -r "$project" "$external"
+  cp "$external/up.opam.locked" "$work/up.opam.locked.tree"
+  (cd "$external" && "$cli" lock --tool-lockfile "$outside")
+  cmp "$work/up.opam.locked.tree" "$outside/up.opam.locked"
+  write_virtual 3
+  commit_repo "Add lambda 3"
+  (cd "$external" && "$cli" update lambda --tool-lockfile "$outside")
+  grep -q '"lambda" {= "3"}' "$outside/up.opam.locked"
+  cmp "$work/up.opam.locked.tree" "$external/up.opam.locked"
+  rm "$external/up.opam.locked"
+  [ "$("$(build "$external" packages.up "opamLocked = $outside;")/bin/up")" = "up" ]
 }
 
 section_lockfiles() {

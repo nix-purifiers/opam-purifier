@@ -420,21 +420,24 @@ def project_packages(root, only=()):
     return packages
 
 
-def definition_files(root):
-    """The files that decide the lock: the project's opam files and the
-    opam lock files beside them, sorted by path."""
-    files = project_opam_files(root) + list(root.glob("*.opam.locked"))
-    return sorted(files, key=lambda p: str(p.relative_to(root)))
+def definition_files(root, locked_dir=None):
+    """The files that decide the lock, as (name, path) pairs sorted by name:
+    the project's opam files, and the opam lock files, which are in
+    `locked_dir` when the build keeps them outside the project and beside
+    the opam files otherwise."""
+    entries = [(str(p.relative_to(root)), p) for p in project_opam_files(root)]
+    entries += [(p.name, p) for p in (locked_dir or root).glob("*.opam.locked")]
+    return sorted(entries)
 
 
-def definition_hash(root, options):
+def definition_hash(root, options, locked_dir=None):
     """The hash of what decides the lock: the SHA-256 of a manifest with a
     line `<path>\\t<sha256>` for each definition file, then the line
     `options\\t<options as compact JSON with sorted keys>`. nix/lib/lock.nix
     computes the same manifest, so the builder notices a stale lockfile."""
     lines = []
-    for path in definition_files(root):
-        lines.append(f"{path.relative_to(root)}\t{hashlib.sha256(path.read_bytes()).hexdigest()}\n")
+    for name, path in definition_files(root, locked_dir):
+        lines.append(f"{name}\t{hashlib.sha256(path.read_bytes()).hexdigest()}\n")
     lines.append("options\t" + json.dumps(options, sort_keys=True, separators=(",", ":")) + "\n")
     return "sha256:" + hashlib.sha256("".join(lines).encode()).hexdigest()
 
@@ -784,11 +787,11 @@ class LockRun:
 
 
 
-def build_outputs(root, lock_path, local_names):
+def build_outputs(root, lock_path, local_names, locked_dir=None):
     """Builds the project's switch in the Nix sandbox from the lockfile
     written so far at lock_path, and reads the outputs from it: the files
     each local package installs, relative to the switch prefix."""
-    out = run(nix_build(root, lock_path, "switch", ["--no-out-link"]), capture=True)
+    out = run(nix_build(root, lock_path, "switch", ["--no-out-link"], locked_dir), capture=True)
     switch = pathlib.Path(out.strip().splitlines()[-1])
     prefix = switch / "_opam"
     outputs = {}
@@ -837,7 +840,7 @@ def resolve_pins(root, lockrun, packages, downloads):
     return pins
 
 
-def lock(root, lock_path, args, update=None):
+def lock(root, lock_path, args, update=None, locked_dir=None):
     """Locks the project. `update` is None for `lock`, and the list of
     package names to update, empty for all of them, for `update`."""
     previous = read_lock(lock_path)
@@ -882,9 +885,21 @@ def lock(root, lock_path, args, update=None):
         "tools": tools,
         "withTest": test_flag,
         "withDoc": doc_flag,
-        "locked": any(root.glob("*.opam.locked")),
+        "locked": False,
     }
-    locked_files = sorted(root.glob("*.opam.locked"))
+    # opam's lock files are in the project, or in `locked_dir` when the
+    # build keeps them outside it. A lock that writes them outside starts
+    # from the copies in the project and leaves those as they are.
+    external = locked_dir is not None and locked_dir.resolve() != root.resolve()
+    if external:
+        locked_dir.mkdir(parents=True, exist_ok=True)
+        for tree_copy in root.glob("*.opam.locked"):
+            if not (locked_dir / tree_copy.name).exists():
+                shutil.copy(tree_copy, locked_dir / tree_copy.name)
+    else:
+        locked_dir = None
+    locked_files = sorted((locked_dir or root).glob("*.opam.locked"))
+    options["locked"] = bool(locked_files)
     if update is not None and locked_files:
         # opam's own lock files hold the versions an update moves, so the
         # update solves without them, writes them again from the build, and
@@ -909,7 +924,7 @@ def lock(root, lock_path, args, update=None):
                     for name, _, version in (p.partition(".") for p in solution["install"] + solution["tools"])
                     if name not in update
                 }
-    definition = definition_hash(root, options)
+    definition = definition_hash(root, options, locked_dir)
     packages = project_packages(root, options["only"])
     local_names = [p["name"] for p in packages]
     with tempfile.TemporaryDirectory(prefix="opam-purifier-") as tmp:
@@ -917,6 +932,22 @@ def lock(root, lock_path, args, update=None):
         # opam installs the project's packages by their opam files, so a lock
         # with --only leaves the others out.
         lockrun.targets = ["./" + p["opamFile"] for p in packages]
+        if external and options["locked"]:
+            # opam solves with --locked from the lock file beside an opam
+            # file, so each opam file that has one outside the project is
+            # solved from a copy that sits beside it.
+            beside = pathlib.Path(tmp) / "locked-targets"
+            beside.mkdir()
+            lockrun.targets = []
+            for p in packages:
+                name = pathlib.Path(p["opamFile"]).name
+                locked = locked_dir / (name + ".locked")
+                if "/" not in p["opamFile"] and locked.is_file():
+                    shutil.copy(root / p["opamFile"], beside / name)
+                    shutil.copy(locked, beside / (name + ".locked"))
+                    lockrun.targets.append(str(beside / name))
+                else:
+                    lockrun.targets.append("./" + p["opamFile"])
         lockrun.init(kept_revs, kept_versions)
 
         downloads = {}
@@ -985,7 +1016,7 @@ def lock(root, lock_path, args, update=None):
         provisional = pathlib.Path(tmp) / LOCK_FILE
         write_lock(provisional, lock_data)
         print("opam-purifier: building the project in the Nix sandbox to record its outputs", file=sys.stderr)
-        outputs, opam_locked = build_outputs(root, provisional, local_names)
+        outputs, opam_locked = build_outputs(root, provisional, local_names, locked_dir)
     for p in packages:
         p["files"] = outputs.get(p["name"], [])
     write_lock(lock_path, lock_data)
@@ -999,7 +1030,7 @@ def lock(root, lock_path, args, update=None):
             print(f"opam-purifier: wrote {path.name}")
         # The lock files changed, so the lock is made again against them,
         # at the commits and versions the update chose.
-        lock(root, lock_path, args)
+        lock(root, lock_path, args, locked_dir=locked_dir)
 
 
 def fetch(url, out):
@@ -1035,23 +1066,24 @@ def current_system():
     fail(f"this machine ({machine}) is not one of the systems a lock covers")
 
 
-def nix_args(root, lock_path):
+def nix_args(root, lock_path, locked_dir=None):
     """The arguments of nix/lib/cli.nix for the project at root."""
     _, nixpkgs, purifier = library()
     return [
         "--arg", "src", str(root),
         "--arg", "lockFile", str(lock_path),
+        "--arg", "opamLocked", str(locked_dir) if locked_dir else "null",
         "--arg", "nixpkgs", nixpkgs,
         "--arg", "purifierSource", purifier,
         "--argstr", "system", current_system(),
     ]
 
 
-def nix_build(root, lock_path, attr, extra):
+def nix_build(root, lock_path, attr, extra, locked_dir=None):
     """A nix-build of an attribute of nix/lib/cli.nix. Nix checks the
     lockfile as it evaluates, and names the command that fixes it."""
     lib, _, _ = library()
-    return ["nix-build", f"{lib}/cli.nix", "-A", attr, *nix_args(root, lock_path), *extra]
+    return ["nix-build", f"{lib}/cli.nix", "-A", attr, *nix_args(root, lock_path, locked_dir), *extra]
 
 
 ENV_SCRIPT = """\
@@ -1073,7 +1105,7 @@ export PATH={state}/loop-bin:"$PATH"
 """
 
 
-def prefetch(root, lock_path):
+def prefetch(root, lock_path, locked_dir=None):
     """Realizes, with garbage-collector roots under .opam-purifier, what
     the development loop needs: the offline state (the repository, the
     downloads and the tools' downloads), and the environment of the
@@ -1084,14 +1116,14 @@ def prefetch(root, lock_path):
     state_dir.mkdir(exist_ok=True)
     state_link = state_dir / "state"
     print("opam-purifier: realizing the locked downloads", file=sys.stderr)
-    run(nix_build(root, lock_path, "state", ["--out-link", str(state_link)]), capture=True)
+    run(nix_build(root, lock_path, "state", ["--out-link", str(state_link)], locked_dir), capture=True)
     print("opam-purifier: realizing the environment of the build", file=sys.stderr)
     shell_env = run(
         [
             "nix", "print-dev-env",
             "--profile", str(state_dir / "shell-profile"),
             "--file", f"{lib}/cli.nix",
-            *nix_args(root, lock_path),
+            *nix_args(root, lock_path, locked_dir),
             "shell",
         ],
         capture=True,
@@ -1140,13 +1172,13 @@ def prefetch(root, lock_path):
 # Publishing.
 
 
-def publish(root, lock_path, args):
+def publish(root, lock_path, args, locked_dir=None):
     lock_data = read_lock(lock_path)
     if lock_data is None:
         fail(f"no {lock_path}; run `opam-purifier lock` first")
     (lock_path.parent / STATE_DIR).mkdir(exist_ok=True)
     link = lock_path.parent / STATE_DIR / "release"
-    run(nix_build(root, lock_path, "release", ["--out-link", str(link)]), capture=True)
+    run(nix_build(root, lock_path, "release", ["--out-link", str(link)], locked_dir), capture=True)
     archive = next(link.resolve().iterdir())
     data = archive.read_bytes()
     sha256 = hashlib.sha256(data).hexdigest()
@@ -1248,20 +1280,31 @@ def main():
                 f"names it too, and the default is {LOCK_FILE} in the current directory"
             ),
         )
+    for p in commands.values():
+        p.add_argument(
+            "--tool-lockfile",
+            help=(
+                "the directory that holds opam's lock files (*.opam.locked) when they are kept outside "
+                "the project; the environment variable OPAM_PURIFIER_TOOL_LOCKFILE names it too"
+            ),
+        )
     args = parser.parse_args()
     root = pathlib.Path.cwd()
     # --lockfile takes precedence over OPAM_PURIFIER_LOCKFILE, and either
     # over the default beside the opam files.
     chosen = args.lockfile or os.environ.get("OPAM_PURIFIER_LOCKFILE")
     lock_path = pathlib.Path(chosen).resolve() if chosen else root / LOCK_FILE
+    # --tool-lockfile takes precedence over OPAM_PURIFIER_TOOL_LOCKFILE.
+    tool_chosen = args.tool_lockfile or os.environ.get("OPAM_PURIFIER_TOOL_LOCKFILE")
+    locked_dir = pathlib.Path(tool_chosen).resolve() if tool_chosen else None
     if args.command == "lock":
-        lock(root, lock_path, args)
+        lock(root, lock_path, args, locked_dir=locked_dir)
     elif args.command == "update":
-        lock(root, lock_path, args, update=args.packages)
+        lock(root, lock_path, args, update=args.packages, locked_dir=locked_dir)
     elif args.command == "prefetch":
-        prefetch(root, lock_path)
+        prefetch(root, lock_path, locked_dir)
     elif args.command == "publish":
-        publish(root, lock_path, args)
+        publish(root, lock_path, args, locked_dir)
 
 
 if __name__ == "__main__":

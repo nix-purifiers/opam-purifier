@@ -5,13 +5,13 @@
 #
 # The file is a package for callPackage: the first argument set is what it
 # takes from the package set, and the result is the builder. The
-# opam-purifier overlay (`overlays.default`) adds it to the package set as
-# `buildOpamProject`, so a package written for callPackage takes it like
-# any other dependency:
+# opam-purifier overlay (`overlays.default`) adds it to the package set in
+# the scope `opam-purifier`, so a package written for callPackage takes it
+# through the scope:
 #
-#   { buildOpamProject }: (buildOpamProject { src = ./.; }).packages.hello
+#   { opam-purifier }: (opam-purifier.buildOpamProject { src = ./.; }).packages.hello
 #
-# and `buildOpamProject.override` replaces what it takes from the set. It
+# and `opam-purifier.buildOpamProject.override` replaces what it takes. It
 # takes `pkgs` because fetchEntry of the purifier library and the system
 # packages named by the depexts need the whole set. The builder takes the
 # arguments project.nix describes, and returns
