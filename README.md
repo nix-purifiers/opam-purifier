@@ -61,10 +61,14 @@ from the package set:
 The builder takes `src`, `lockFile` (the default is
 `opam-purifier.lock.json` in `src`), `opamLocked` (a directory that holds
 opam's lock files, in place of the ones in `src`), `fetchers`, `name`,
-`releasePackage`,
-`nativeBuildInputs`, `buildInputs` (for libraries that the depexts of the
-locked packages do not name) and `srcFilter`. `nix/lib/project.nix`
-documents each one. It returns:
+`releasePackage`, `nativeBuildInputs`, `buildInputs` (for libraries that
+the depexts of the locked packages do not name) and `srcFilter`.
+`nix/lib/project.nix` documents each one.
+
+The builder as a package takes the whole package set, `pkgs`, beside the
+packages it needs by name. The lockfile names the system dependencies of
+the locked packages, the depexts, by nixpkgs attribute, and the builder
+looks each one up in the package set by that name. The builder returns:
 
 | Attribute | What it is |
 |---|---|
