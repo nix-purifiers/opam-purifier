@@ -26,9 +26,35 @@ and aarch64-linux), solves the project's dependencies with that system's
 platform variables, and records the result. It then builds the project in
 the Nix sandbox, with its tests, to record the files each package installs.
 
-The flake's `overlays.default` adds one attribute to the package set, the
-scope `opam-purifier`. It holds the builder `buildOpamProject` and the
-command `opam-purifier`. Build the project from a flake:
+Build the project from its directory. This adds no Nix file to the project:
+
+```zsh
+nix build --impure --expr '
+  let
+    purifier = builtins.getFlake "github:nix-purifiers/opam-purifier";
+    pkgs = import purifier.inputs.nixpkgs {
+      system = builtins.currentSystem;
+      overlays = [ purifier.overlays.default ];
+    };
+  in
+  (pkgs.opam-purifier.buildOpamProject { src = ./.; }).packages.hello'
+```
+
+This uses the purifier's pinned nixpkgs, matching the lock command above.
+To build with ambient `<nixpkgs>` from your Nix search path instead,
+replace `import purifier.inputs.nixpkgs` with `import <nixpkgs>`.
+Both forms need no Nix files in your project. The build tool and language
+versions must match the lockfile; with ambient nixpkgs, lock with the
+purifier from that package set or pass a compatible toolchain to the builder.
+
+`result` links to the files that the project's package `hello` installs.
+Use `.tests` in place of `.packages.hello` to build the project with its
+tests.
+
+### A flake that packages the project
+
+A project whose authors want a flake can have one, in its repository or in
+another one. The flake calls the builder directly:
 
 ```nix
 {
@@ -48,15 +74,11 @@ command `opam-purifier`. Build the project from a flake:
 }
 ```
 
-A package in your own overlay takes the scope by name.
-`opam-purifier.overrideScope` replaces what the scope shares, and
-`opam-purifier.buildOpamProject.override` replaces what the builder takes
-from the package set:
-
-```nix
-# hello.nix
-{ opam-purifier }: (opam-purifier.buildOpamProject { src = ./.; }).packages.hello
-```
+`overlays.default` adds one attribute to the package set, the scope
+`opam-purifier`. It holds the builder `buildOpamProject` and the command
+`opam-purifier`. `opam-purifier.overrideScope` replaces what the scope
+shares, and `opam-purifier.buildOpamProject.override` replaces what the
+builder takes from the package set.
 
 The builder takes `src`, `lockFile` (the default is
 `opam-purifier.lock.json` in `src`), `opamLocked` (a directory that holds
@@ -270,8 +292,8 @@ Limits:
 ### ocaml-uri
 
 [ocaml-uri](https://github.com/mirage/ocaml-uri) is a library for parsing
-URIs. In your checkout of it, lock the three library packages and commit
-the lockfile with the project:
+URIs. In your checkout of it, lock the three library packages, commit the
+lockfile with the project, and build the library from the checkout:
 
 ```zsh
 git clone --branch v4.4.0 https://github.com/mirage/ocaml-uri
@@ -279,75 +301,43 @@ cd ocaml-uri
 nix run github:nix-purifiers/opam-purifier -- lock \
   --only uri --only uri-re --only uri-sexp
 git add opam-purifier.lock.json
+nix build --impure --expr '
+  let
+    purifier = builtins.getFlake "github:nix-purifiers/opam-purifier";
+    pkgs = import purifier.inputs.nixpkgs {
+      system = builtins.currentSystem;
+      overlays = [ purifier.overlays.default ];
+    };
+  in
+  (pkgs.opam-purifier.buildOpamProject { src = ./.; }).packages.uri'
 ```
 
 The repository also holds a benchmark package, `uri-bench`. `--only` locks
-the three library packages and leaves it out.
+the three library packages and leaves it out. Use `.tests` in place of
+`.packages.uri` to build all three with their tests. To change the
+version, check out another tag and run the `lock` command again.
 
-A `flake.nix` at the root of the checkout builds them:
+### ocaml-uri with the lockfile outside the repository
 
-```nix
-{
-  inputs.opam-purifier.url = "github:nix-purifiers/opam-purifier";
-  inputs.nixpkgs.follows = "opam-purifier/nixpkgs";
-
-  outputs =
-    { nixpkgs, opam-purifier, ... }:
-    let
-      pkgs = nixpkgs.legacyPackages.x86_64-linux.extend opam-purifier.overlays.default;
-      project = pkgs.opam-purifier.buildOpamProject { src = ./.; };
-    in
-    {
-      packages.x86_64-linux = {
-        inherit (project.packages) uri uri-re uri-sexp;
-      };
-      checks.x86_64-linux.tests = project.tests;
-    };
-}
-```
-
-`nix build .#uri` builds the library, and `nix flake check` builds all
-three packages with their tests. To change the version, check out another
-tag and run the `lock` command again.
-
-### ocaml-uri from a packaging flake
-
-A flake of your own can package ocaml-uri without changing its repository.
-Lock it from a checkout, and write the lockfile beside the flake:
+To leave the repository as it is, write the lockfile beside the checkout and
+point the build at it:
 
 ```zsh
 nix run github:nix-purifiers/opam-purifier -- lock \
   --only uri --only uri-re --only uri-sexp \
   --lockfile ../uri.lock.json
-```
-
-The flake takes the source from GitHub and the lockfile from beside it:
-
-```nix
-{
-  inputs.opam-purifier.url = "github:nix-purifiers/opam-purifier";
-  inputs.nixpkgs.follows = "opam-purifier/nixpkgs";
-  inputs.uri = {
-    url = "github:mirage/ocaml-uri/v4.4.0";
-    flake = false;
-  };
-
-  outputs =
-    { nixpkgs, opam-purifier, uri, ... }:
-    let
-      pkgs = nixpkgs.legacyPackages.x86_64-linux.extend opam-purifier.overlays.default;
-      project = pkgs.opam-purifier.buildOpamProject {
-        src = uri;
-        lockFile = ./uri.lock.json;
-      };
-    in
-    {
-      packages.x86_64-linux = {
-        inherit (project.packages) uri uri-re uri-sexp;
-      };
-      checks.x86_64-linux.tests = project.tests;
+nix build --impure --expr '
+  let
+    purifier = builtins.getFlake "github:nix-purifiers/opam-purifier";
+    pkgs = import purifier.inputs.nixpkgs {
+      system = builtins.currentSystem;
+      overlays = [ purifier.overlays.default ];
     };
-}
+  in
+  (pkgs.opam-purifier.buildOpamProject {
+    src = ./.;
+    lockFile = ../uri.lock.json;
+  }).packages.uri'
 ```
 
 ## 8. Credits
