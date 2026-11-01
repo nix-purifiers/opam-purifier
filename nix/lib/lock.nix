@@ -19,7 +19,11 @@ let
   length = builtins.stringLength text;
   shaped =
     length > 2 && builtins.substring 0 1 text == "{" && builtins.substring (length - 2) 2 text == "}\n";
-  lock = builtins.fromJSON text;
+  # A parse error cannot become a problem, because Nix cannot catch it, so
+  # evaluation fails with the command that fixes the file.
+  lock = builtins.addErrorContext "while reading ${toString lockFile}, which is not valid JSON; run `opam-purifier lock` to write it again" (
+    builtins.fromJSON text
+  );
 
   supportedVersion = import ./lock-version.nix;
 
