@@ -433,6 +433,8 @@ class LockRun:
         self.options = options
         self.work = work
         self.opam_root = work / "root"
+        # Store paths of checkouts the lock run fetched itself, by entry path.
+        self.checkouts = {}
         self.env = dict(os.environ)
         self.env.update(
             {
@@ -460,8 +462,23 @@ class LockRun:
             env.update(platform_env(system))
         return run(["opam", *args], env=env, cwd=self.root, capture=capture)
 
+    def pin(self, pins):
+        """Pins the project's pin-depends before the solve, which then runs
+        with --ignore-pin-depends."""
+        for p in pins.values():
+            if p["kind"] == "project":
+                self.opam("pin", "add", "--no-action", "--kind=path", p["package"], str(self.root / p["path"]))
+            elif p.get("path") in self.checkouts:
+                copy = self.work / "pins" / p["package"]
+                shutil.copytree(self.checkouts[p["path"]], copy)
+                for item in [copy, *copy.rglob("*")]:
+                    item.chmod(item.stat().st_mode | 0o200)
+                self.opam("pin", "add", "--no-action", "--kind=path", p["package"], str(copy))
+            else:
+                self.opam("pin", "add", "--no-action", p["package"], p["url"])
+
     def install_args(self):
-        args = []
+        args = ["--ignore-pin-depends"]
         if self.options["withTest"]:
             args.append("--with-test")
         if self.options["withDoc"]:
@@ -683,17 +700,27 @@ class LockRun:
             # A tag names a Darcs state. Without one, opam takes the head,
             # and only a context file names that state, so the lock keeps
             # the context's text.
-            cmd = ["nix-prefetch-darcs", "--quiet", "--repo", fetch_url]
+            # nix-prefetch-darcs hands darcs its clone options as one argument,
+            # so it cannot clone by tag. The lock run clones the way nixpkgs'
+            # fetchdarcs does and hashes the files without `_darcs`.
+            checkout = self.work / "darcs" / path.replace("/", "_")
+            checkout.parent.mkdir(exist_ok=True)
+            cmd = ["darcs", "clone", "--lazy", "--quiet"]
             if ref:
-                cmd += ["--tag", ref]
-            info = json.loads(run(cmd, capture=True))
+                cmd.append(f"--tag={ref}")
+            run([*cmd, fetch_url, str(checkout)])
             context = None
             if not ref:
-                context = pathlib.Path(info["context"]).read_text()
+                context = run(["darcs", "log", "--context", f"--repodir={checkout}"], capture=True)
+            shutil.rmtree(checkout / "_darcs")
+            hash_ = run(["nix", "hash", "path", "--type", "sha256", str(checkout)], capture=True).strip()
+            # opam's own Darcs backend clones only `_darcs`, without the
+            # files, so the lock run pins Darcs sources to this checkout.
+            self.checkouts[path] = str(checkout)
             return {
                 "path": path,
                 "darcs": {"url": fetch_url, "rev": ref or None, "context": context},
-                "hash": info["hash"],
+                "hash": hash_,
             }
         fail(f"{url}: the lock cannot fetch {kind} sources")
 
@@ -751,7 +778,7 @@ def resolve_pins(root, lockrun, packages, downloads):
         elif vcs_of(url):
             entry = lockrun.vcs_entry(url, f"sources/{package}")
             downloads[entry["path"]] = entry
-            pins[package] = {"package": package, "name": name, "kind": "source", "path": entry["path"]}
+            pins[package] = {"package": package, "name": name, "kind": "source", "path": entry["path"], "url": url}
         else:
             src, _, checksum = url.partition("#")
             entry = lockrun.file_entry({"src": src, "checksums": [checksum] if checksum else [], "mirrors": []})
@@ -814,6 +841,10 @@ def lock(root, args, force):
         lockrun.targets = ["./" + p["opamFile"] for p in packages]
         lockrun.init()
 
+        downloads = {}
+        pins = resolve_pins(root, lockrun, packages, downloads)
+        lockrun.pin(pins)
+
         systems = {}
         for system in SYSTEMS:
             print(f"opam-purifier: solving for {system}", file=sys.stderr)
@@ -824,8 +855,6 @@ def lock(root, args, force):
             systems[system] = {"install": installs, "tools": tools, "depexts": sorted(depexts)}
         all_packages = sorted({p for s in systems.values() for p in s["install"] + s["tools"]})
 
-        downloads = {}
-        pins = resolve_pins(root, lockrun, packages, downloads)
         pinned_names = {p["name"] for p in pins.values()}
 
         # The downloads of every solved package. A package whose source is

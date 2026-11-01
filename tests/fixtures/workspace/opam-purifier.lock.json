@@ -95,7 +95,8 @@
       "package": "base64.3.5.1",
       "name": "base64",
       "kind": "source",
-      "path": "sources/base64.3.5.1"
+      "path": "sources/base64.3.5.1",
+      "url": "git+https://github.com/mirage/ocaml-base64.git#v3.5.1"
     },
     {
       "package": "uutf.1.0.3",
@@ -246,5 +247,5 @@
       "hash": "sha256-v6TL/vDlheQRPzLAzMcN+djaOuRcqR6kpQ4rnKC0QJQ="
     }
   ],
-  "lockHash": "sha256:bce215a5a8eb5b85522554d22c0061ef943e31c0a611d1a5367bd9c3fb41a3c3"
+  "lockHash": "sha256:3497d1f08a22b566a1554e36bf9f1fb05ecb7868ab2f738f7e25bab56c6478b8"
 }

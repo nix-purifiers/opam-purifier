@@ -4,14 +4,18 @@
 { lockFile }:
 let
   text = builtins.readFile lockFile;
+  # A JSON parse error stops evaluation before tryEval can catch it, so
+  # the reader first checks that the text is shaped like the JSON object
+  # the CLI writes: it starts with `{` and ends with `}` and a newline. A
+  # truncated or overwritten lockfile fails here with the command to run.
+  length = builtins.stringLength text;
+  shaped =
+    length > 2 && builtins.substring 0 1 text == "{" && builtins.substring (length - 2) 2 text == "}\n";
   lock =
-    let
-      parsed = builtins.tryEval (builtins.fromJSON text);
-    in
-    if parsed.success && builtins.isAttrs parsed.value then
-      parsed.value
+    if shaped then
+      builtins.fromJSON text
     else
-      throw "opam-purifier: ${toString lockFile} is not a lockfile (it is not a JSON object); run `opam-purifier relock` to write it again.";
+      throw "opam-purifier: ${toString lockFile} is not a lockfile that `opam-purifier lock` wrote (it is not a whole JSON object); run `opam-purifier relock` to write it again.";
 
   supportedVersion = import ./lock-version.nix;
 
