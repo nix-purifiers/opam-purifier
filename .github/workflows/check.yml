@@ -4,8 +4,9 @@
 # checks: the CLI build, the sandboxed builds of the fixtures and of
 # ocaml-uri from their lockfiles with a run of what they build, the
 # conformance checks the sandbox can run, and the formatting. The
-# conformance checks that need the network or a second build run as jobs
-# of the same name, from tests/interactive.sh, and the `integration` job
+# conformance checks that need the network, a second build or a network
+# namespace run as jobs of the same name, from tests/interactive.sh, and
+# the `integration` job
 # runs the rest of that script: the lock run against opam's own lock
 # files, publishing, the CLI's failures, and the git, Darcs and Mercurial
 # sources.
@@ -41,6 +42,7 @@ jobs:
           - conformance-relock
           - conformance-offline
           - conformance-rebuild
+          - conformance-update
           - integration
     name: ${{ matrix.section }} (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}

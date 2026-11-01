@@ -4,7 +4,13 @@
 # opam-purifier: locks every file an opam project downloads, so that Nix
 # can build the project offline in its sandbox.
 #
-#   opam-purifier lock       solve the project and record every download
+#   opam-purifier lock       solve the project and record every download,
+#                            with each git repository at the commit the
+#                            lockfile records
+#   opam-purifier update     the same, with each git repository at the
+#                            commit its ref names now, for every package or
+#                            the ones named; it also writes opam's own lock
+#                            files (*.opam.locked) when the project has them
 #   opam-purifier prefetch   realize what the everyday loop and the editor
 #                            need, and set up the local switch _opam
 #   opam-purifier publish    build the release archive with Nix and submit
@@ -35,9 +41,15 @@ LOCK_FILE = "opam-purifier.lock.json"
 # The package the lock run makes to solve the tools (--tool) together
 # with the project.
 TOOLS_PACKAGE = "opam-purifier-tools"
-LOCK_VERSION = 1
+# The package `update` makes to hold the packages it leaves alone at their
+# locked versions.
+KEPT_PACKAGE = "opam-purifier-kept"
+LOCK_VERSION = 2
 STATE_DIR = ".opam-purifier"
-DEFAULT_REPOSITORY = ("default", "https://opam.ocaml.org")
+# The default repository is opam-repository on GitHub, which the lock run
+# pins to the commit its default branch names, so that Nix reads the opam
+# files from that commit.
+DEFAULT_REPOSITORY = ("default", "git+https://github.com/ocaml/opam-repository.git")
 OPAM_CACHE = "https://opam.ocaml.org/cache"
 
 # The Nix systems a lock covers, with the value of opam's `arch` variable
@@ -181,8 +193,10 @@ class OpamFile:
     def at_item(self):
         """Whether the next tokens start a field (`name:`) or a section
         (`name {` or `name "label" {`)."""
-        kind, _ = self.peek()
-        if kind != "tok":
+        kind, name = self.peek()
+        # An operator such as `|` or `&` is a token too, and `a | "b" {...}`
+        # is a filter, never a section named `|`.
+        if kind != "tok" or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", name):
             return False
         k1, _ = self.peek(1)
         if k1 in (":", "{"):
@@ -333,6 +347,29 @@ def cache_url(checksum):
 def cache_path(checksum):
     kind, _, hexdigest = checksum.partition("=")
     return f"download-cache/{kind}/{hexdigest[:2]}/{hexdigest}"
+
+
+def usable_checksum(checksums):
+    """The first checksum Nix can fetch by, or None. Nix derives the
+    download entry of a source with one from its opam file
+    (nix/lib/derive.nix), so the lockfile leaves the entry out."""
+    for checksum in checksums:
+        if re.fullmatch(r"sha256=[0-9a-f]{64}|sha512=[0-9a-f]{128}", checksum):
+            return checksum
+    return None
+
+
+def git_rev(fetch_url, ref):
+    """The commit a git ref names, or the ref when it is a commit."""
+    if re.fullmatch(r"[0-9a-f]{40}", ref or ""):
+        return ref
+    out = run(["git", "ls-remote", fetch_url, ref or "HEAD"], capture=True)
+    lines = [line.split("\t") for line in out.splitlines() if line]
+    if not lines:
+        fail(f"{fetch_url}: git cannot find {ref or 'HEAD'}")
+    # A tag's peeled commit comes after the tag object.
+    peeled = [line for line in lines if line[1].endswith("^{}")]
+    return (peeled or lines)[0][0]
 
 
 # ---------------------------------------------------------------------------
@@ -488,33 +525,48 @@ class LockRun:
         return args
 
     def repository_source(self, repo):
-        """Where opam reads a repository from. A URL `archive+<url>` names an
-        archive of the repository, such as opam-repository at a commit on
-        GitHub; the lock run unpacks it and gives opam the directory, so a
-        relock reads the same repository state."""
+        """Where opam reads a repository from, and the record of it in the
+        lockfile. A repository named by `archive+<url>`, such as
+        opam-repository at a commit on GitHub, is recorded with the hash
+        of its unpacked content. A git repository (`git+<url>#<ref>`) is
+        recorded at the commit its ref names. Nix fetches either at
+        evaluation and reads the opam files from it. Any other repository
+        can change after the lock, so the lockfile copies the opam files
+        of the packages solved from it."""
         url = repo["url"]
-        if not url.startswith("archive+"):
-            return url
-        archive = self.download(url[len("archive+") :])
         target = self.work / "repositories" / repo["name"]
-        target.mkdir(parents=True)
-        with tarfile.open(archive) as tar:
-            members = tar.getmembers()
-            tops = {m.name.split("/", 1)[0] for m in members}
-            strip = len(tops) == 1
-            for member in members:
-                if strip:
-                    if "/" not in member.name:
-                        continue
-                    member.name = member.name.split("/", 1)[1]
-                if not member.name or member.issym() or member.islnk():
-                    continue
-                tar.extract(member, target, filter="data")
+        target.parent.mkdir(exist_ok=True)
+        if url.startswith("archive+"):
+            archive_url = url[len("archive+") :]
+            out = run(["nix-prefetch-url", "--unpack", "--print-path", archive_url], capture=True).split()
+            sri = run(
+                ["nix", "hash", "convert", "--hash-algo", "sha256", "--to", "sri", out[-2]], capture=True
+            ).strip()
+            run(["cp", "-r", "--no-preserve=mode", out[-1], str(target)])
+            record = {"name": repo["name"], "archive": archive_url, "hash": sri}
+        elif url.startswith("git+"):
+            fetch_url, ref = split_vcs(url)
+            rev = self.kept_revs.get((repo["name"], fetch_url)) or git_rev(fetch_url, ref)
+            target.mkdir(parents=True)
+            run(["git", "init", "--quiet", str(target)])
+            run(["git", "-C", str(target), "fetch", "--quiet", "--depth", "1", fetch_url, rev])
+            run(["git", "-C", str(target), "checkout", "--quiet", "FETCH_HEAD"])
+            shutil.rmtree(target / ".git")
+            record = {"name": repo["name"], "git": {"url": fetch_url, "rev": rev}}
+        else:
+            self.repositories.append({"name": repo["name"], "url": url, "copied": True})
+            return url
         if not (target / "repo").is_file():
-            fail(f"{url}: the archive holds no opam repository (no `repo` file at its top)")
+            fail(f"{url}: it holds no opam repository (no `repo` file at its top)")
+        self.repositories.append(record)
         return str(target)
 
-    def init(self):
+    def init(self, kept_revs, kept_versions):
+        # The commits of git repositories and the versions of packages that
+        # the lock keeps from the previous lockfile.
+        self.kept_revs = kept_revs
+        self.kept_versions = kept_versions
+        self.repositories = []
         repositories = self.options["repositories"]
         first = repositories[0]
         self.opam(
@@ -545,12 +597,24 @@ class LockRun:
         system, as name.version strings, and the ones of them only the tools
         need. Their archives land in the download cache."""
         tools = [str(self.tools_dir / f"{TOOLS_PACKAGE}.opam")] if self.tools_dir else []
-        args = ["install", "--deps-only", *self.install_args(), *self.targets, *tools]
+        # The packages an update leaves alone stay at their locked versions.
+        # A generated package depends on them at those versions, and
+        # --deps-only installs its dependencies.
+        kept = []
+        if self.kept_versions.get(system):
+            depends = " ".join(f'"{n}" {{= "{v}"}}' for n, v in sorted(self.kept_versions[system].items()))
+            kept_file = self.work / f"kept-{system}" / f"{KEPT_PACKAGE}.opam"
+            kept_file.parent.mkdir(exist_ok=True)
+            kept_file.write_text(
+                f'opam-version: "2.0"\nname: "{KEPT_PACKAGE}"\nversion: "1"\ndepends: [ {depends} ]\n'
+            )
+            kept = [str(kept_file)]
+        args = ["install", "--deps-only", *self.install_args(), *self.targets, *tools, *kept]
         self.opam(*args, "--download-only", system=system)
         joint = self.dry_run(args, system, local_names, "joint")
         if not self.tools_dir:
             return joint, []
-        project_args = ["install", "--deps-only", *self.install_args(), *self.targets]
+        project_args = ["install", "--deps-only", *self.install_args(), *self.targets, *kept]
         project_names = {p.partition(".")[0] for p in self.dry_run(project_args, system, local_names, "project")}
         tools_only = [p for p in joint if p.partition(".")[0] not in project_names]
         return [p for p in joint if p not in tools_only], tools_only
@@ -579,7 +643,7 @@ class LockRun:
                 f"{p['name']}.{p['version']}"
                 for p in packages
                 if p["name"] not in local_names
-                and p["name"] != TOOLS_PACKAGE
+                and p["name"] not in (TOOLS_PACKAGE, KEPT_PACKAGE)
                 and not p["name"].startswith("deps-of-")
             }
         )
@@ -590,15 +654,16 @@ class LockRun:
     def raw_opam(self, package):
         return self.opam("show", "--raw", package, capture=True)
 
-    def repository_entries(self, packages, pinned):
-        """The repository files of the solved packages, as inline entries at
-        their paths in a repository."""
+    def repository_entries(self, origins):
+        """The repository files of the packages solved from a repository
+        the lockfile copies, as inline entries at their paths in a
+        repository."""
+        copied = {r["name"] for r in self.repositories if r.get("copied")}
         entries = {}
-        for package in packages:
+        for package, repo in origins.items():
             name = package.partition(".")[0]
-            if name in pinned:
+            if repo not in copied:
                 continue
-            repo = self.package_field(package, "repository")
             archive = self.opam_root / "repo" / f"{repo}.tar.gz"
             directory = self.opam_root / "repo" / repo
             prefix = f"packages/{name}/{package}/"
@@ -657,15 +722,7 @@ class LockRun:
         kind = vcs_of(url)
         fetch_url, ref = split_vcs(url)
         if kind == "git":
-            rev = ref
-            if not re.fullmatch(r"[0-9a-f]{40}", rev or ""):
-                out = run(["git", "ls-remote", fetch_url, ref or "HEAD"], capture=True)
-                lines = [line.split("\t") for line in out.splitlines() if line]
-                if not lines:
-                    fail(f"{url}: git cannot find {ref or 'HEAD'}")
-                # A tag's peeled commit comes after the tag object.
-                peeled = [line for line in lines if line[1].endswith("^{}")]
-                rev = (peeled or lines)[0][0]
+            rev = git_rev(fetch_url, ref)
             # opam checks out a git source with its submodules.
             out = run(
                 ["nix-prefetch-git", "--quiet", "--fetch-submodules", "--url", fetch_url, "--rev", rev],
@@ -743,7 +800,7 @@ def build_outputs(root, lock_path, local_names):
             if line.strip() and path.is_relative_to(prefix) and (path.is_file() or path.is_symlink()):
                 files.append(str(path.relative_to(prefix)))
         outputs[name] = sorted(files)
-    return outputs
+    return outputs, switch / "nix-support" / "opam-locked"
 
 
 def resolve_pins(root, lockrun, packages, downloads):
@@ -780,11 +837,21 @@ def resolve_pins(root, lockrun, packages, downloads):
     return pins
 
 
-def lock(root, lock_path, args):
+def lock(root, lock_path, args, update=None):
+    """Locks the project. `update` is None for `lock`, and the list of
+    package names to update, empty for all of them, for `update`."""
     previous = read_lock(lock_path)
-    if args.repo:
+    if previous is not None and previous.get("version") != LOCK_VERSION:
+        previous = None
+    # `update` takes no options; it keeps the ones the lockfile records.
+    repo_specs = getattr(args, "repo", None)
+    tool_names = getattr(args, "tool", None)
+    only_names = getattr(args, "only", None)
+    test_flag = getattr(args, "test", None)
+    doc_flag = getattr(args, "doc", None)
+    if repo_specs:
         repositories = []
-        for spec in args.repo:
+        for spec in repo_specs:
             name, sep, url = spec.partition("=")
             if not sep:
                 fail(f"--repo {spec}: expected NAME=URL")
@@ -793,26 +860,55 @@ def lock(root, lock_path, args):
         repositories = previous["options"]["repositories"]
     else:
         repositories = [{"name": DEFAULT_REPOSITORY[0], "url": DEFAULT_REPOSITORY[1]}]
-    if args.tool is not None:
-        tools = sorted(set(args.tool))
+    if tool_names is not None:
+        tools = sorted(set(tool_names))
     elif previous:
         tools = previous["options"].get("tools", [])
     else:
         tools = []
-    if args.only is not None:
-        only = sorted(set(args.only))
+    if only_names is not None:
+        only = sorted(set(only_names))
     elif previous:
         only = previous["options"].get("only", [])
     else:
         only = []
+    if test_flag is None:
+        test_flag = previous["options"]["withTest"] if previous else True
+    if doc_flag is None:
+        doc_flag = previous["options"]["withDoc"] if previous else False
     options = {
         "repositories": repositories,
         "only": only,
         "tools": tools,
-        "withTest": not args.without_test,
-        "withDoc": args.with_doc,
+        "withTest": test_flag,
+        "withDoc": doc_flag,
         "locked": any(root.glob("*.opam.locked")),
     }
+    locked_files = sorted(root.glob("*.opam.locked"))
+    if update is not None and locked_files:
+        # opam's own lock files hold the versions an update moves, so the
+        # update solves without them, writes them again from the build, and
+        # locks against the result.
+        options["locked"] = False
+    kept_revs = {}
+    kept_versions = {}
+    if previous is not None:
+        if update is None:
+            kept_revs = {
+                (r["name"], r["git"]["url"]): r["git"]["rev"]
+                for r in previous.get("repositories", [])
+                if "git" in r
+            }
+        elif update:
+            unknown = sorted(set(update) - {p.partition(".")[0] for s in previous["systems"].values() for p in s["install"] + s["tools"]})
+            if unknown:
+                fail(f"{', '.join(unknown)} {'is' if len(unknown) == 1 else 'are'} not in {lock_path}")
+            for system, solution in previous["systems"].items():
+                kept_versions[system] = {
+                    name: version
+                    for name, _, version in (p.partition(".") for p in solution["install"] + solution["tools"])
+                    if name not in update
+                }
     definition = definition_hash(root, options)
     packages = project_packages(root, options["only"])
     local_names = [p["name"] for p in packages]
@@ -821,7 +917,7 @@ def lock(root, lock_path, args):
         # opam installs the project's packages by their opam files, so a lock
         # with --only leaves the others out.
         lockrun.targets = ["./" + p["opamFile"] for p in packages]
-        lockrun.init()
+        lockrun.init(kept_revs, kept_versions)
 
         downloads = {}
         pins = resolve_pins(root, lockrun, packages, downloads)
@@ -839,25 +935,36 @@ def lock(root, lock_path, args):
 
         pinned_names = {p["name"] for p in pins.values()}
 
-        # The downloads of every solved package. A package whose source is
-        # a version-control repository is installed from its checkout.
+        # The repository each package came from, and the downloads of every
+        # solved package. A package whose source is a version-control
+        # repository is installed from its checkout. A source whose opam
+        # file gives a checksum Nix can fetch by needs no entry: Nix derives
+        # it from the opam file.
+        origins = {}
         for package in all_packages:
             name = package.partition(".")[0]
             if name in pinned_names:
                 continue
+            origins[package] = lockrun.package_field(package, "repository")
             for source in sources_of(lockrun.raw_opam(package)):
                 if vcs_of(source["src"]):
                     entry = lockrun.vcs_entry(source["src"], f"sources/{package}")
                     pins[package] = {"package": package, "name": name, "kind": "source", "path": entry["path"], "repository": True}
+                elif usable_checksum(source["checksums"]):
+                    continue
                 else:
                     entry = lockrun.file_entry(source)
                 downloads[entry["path"]] = entry
 
-        repository = lockrun.repository_entries(all_packages, pinned_names)
+        repository = lockrun.repository_entries(origins)
         opam_version = run(["opam", "--version"], capture=True).strip()
 
     for p in packages:
         p["files"] = []
+    if len(lockrun.repositories) > 1:
+        extra = {"origins": dict(sorted(origins.items()))}
+    else:
+        extra = {}
     lock_data = {
         "version": LOCK_VERSION,
         "opam": opam_version,
@@ -865,9 +972,11 @@ def lock(root, lock_path, args):
         "options": options,
         "packages": packages,
         "systems": systems,
+        "repositories": lockrun.repositories,
         "pins": sorted(pins.values(), key=lambda p: p["package"]),
         "repository": repository,
         "downloads": [downloads[k] for k in sorted(downloads)],
+        **extra,
     }
     # The lockfile so far goes outside the project until the build that
     # records the outputs succeeds, so a failed lock run leaves the
@@ -876,11 +985,21 @@ def lock(root, lock_path, args):
         provisional = pathlib.Path(tmp) / LOCK_FILE
         write_lock(provisional, lock_data)
         print("opam-purifier: building the project in the Nix sandbox to record its outputs", file=sys.stderr)
-        outputs = build_outputs(root, provisional, local_names)
+        outputs, opam_locked = build_outputs(root, provisional, local_names)
     for p in packages:
         p["files"] = outputs.get(p["name"], [])
     write_lock(lock_path, lock_data)
     print(f"opam-purifier: wrote {lock_path} with {len(all_packages)} packages")
+    if update is not None and locked_files:
+        for path in locked_files:
+            written = opam_locked / path.name
+            if not written.is_file():
+                fail(f"the build wrote no {path.name}; run `opam lock` in the everyday loop, then `opam-purifier lock`")
+            path.write_text(written.read_text())
+            print(f"opam-purifier: wrote {path.name}")
+        # The lock files changed, so the lock is made again against them,
+        # at the commits and versions the update chose.
+        lock(root, lock_path, args)
 
 
 def fetch(url, out):
@@ -961,7 +1080,7 @@ def prefetch(root, lock_path):
     sandboxed build. It then sets up the local switch _opam from them, and
     writes .opam-purifier/env.sh."""
     lib, _, _ = library()
-    state_dir = root / STATE_DIR
+    state_dir = lock_path.parent / STATE_DIR
     state_dir.mkdir(exist_ok=True)
     state_link = state_dir / "state"
     print("opam-purifier: realizing the locked downloads", file=sys.stderr)
@@ -1012,7 +1131,7 @@ def prefetch(root, lock_path):
         )
     )
     print(
-        "opam-purifier: _opam holds the locked dependencies. Run `source .opam-purifier/env.sh` in bash, "
+        f"opam-purifier: _opam holds the locked dependencies. Run `source {state_dir / 'env.sh'}` in bash, "
         "or put that line in .envrc for direnv, then `dune build` and `dune test`."
     )
 
@@ -1025,8 +1144,8 @@ def publish(root, lock_path, args):
     lock_data = read_lock(lock_path)
     if lock_data is None:
         fail(f"no {lock_path}; run `opam-purifier lock` first")
-    (root / STATE_DIR).mkdir(exist_ok=True)
-    link = root / STATE_DIR / "release"
+    (lock_path.parent / STATE_DIR).mkdir(exist_ok=True)
+    link = lock_path.parent / STATE_DIR / "release"
     run(nix_build(root, lock_path, "release", ["--out-link", str(link)]), capture=True)
     archive = next(link.resolve().iterdir())
     data = archive.read_bytes()
@@ -1097,8 +1216,22 @@ def main():
         action="append",
         help="a package for the everyday loop only, such as ocaml-lsp-server",
     )
-    p.add_argument("--without-test", action="store_true", help="leave out test dependencies")
-    p.add_argument("--with-doc", action="store_true", help="lock documentation dependencies too")
+    p.add_argument(
+        "--with-test",
+        dest="test",
+        action="store_true",
+        default=None,
+        help="lock the test dependencies, as the lock does unless --without-test made it",
+    )
+    p.add_argument("--without-test", dest="test", action="store_false", help="leave out the test dependencies")
+    p.add_argument(
+        "--with-doc", dest="doc", action="store_true", default=None, help="lock the documentation dependencies too"
+    )
+    p.add_argument("--without-doc", dest="doc", action="store_false", help="leave out the documentation dependencies")
+    p = commands["update"] = sub.add_parser(
+        "update", help="lock again at the newest versions the repositories offer, for every package or the ones named"
+    )
+    p.add_argument("packages", nargs="*", help="the packages to update; the default is every package")
     commands["prefetch"] = sub.add_parser(
         "prefetch", help="realize what the everyday loop and the editor need, and set up _opam"
     )
@@ -1110,13 +1243,21 @@ def main():
     for p in commands.values():
         p.add_argument(
             "--lockfile",
-            help=f"the lockfile to write or read; the default is {LOCK_FILE} in the current directory",
+            help=(
+                "the lockfile to write or read; the environment variable OPAM_PURIFIER_LOCKFILE "
+                f"names it too, and the default is {LOCK_FILE} in the current directory"
+            ),
         )
     args = parser.parse_args()
     root = pathlib.Path.cwd()
-    lock_path = pathlib.Path(args.lockfile).resolve() if args.lockfile else root / LOCK_FILE
+    # --lockfile takes precedence over OPAM_PURIFIER_LOCKFILE, and either
+    # over the default beside the opam files.
+    chosen = args.lockfile or os.environ.get("OPAM_PURIFIER_LOCKFILE")
+    lock_path = pathlib.Path(chosen).resolve() if chosen else root / LOCK_FILE
     if args.command == "lock":
         lock(root, lock_path, args)
+    elif args.command == "update":
+        lock(root, lock_path, args, update=args.packages)
     elif args.command == "prefetch":
         prefetch(root, lock_path)
     elif args.command == "publish":

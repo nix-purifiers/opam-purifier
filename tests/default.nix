@@ -8,6 +8,7 @@
 {
   pkgs,
   buildOpamProject,
+  readLock,
   # The purifier library, for the check that builds the internals of
   # project.nix.
   purifier,
@@ -43,8 +44,9 @@ let
 
   # Evaluates the lockfile reader of the library on a lockfile and a
   # project inside the sandbox, and expects the evaluation to fail with a
-  # message that contains `pattern`. `setup` writes $TMPDIR/lock.json and
-  # $TMPDIR/src.
+  # message that contains `pattern`. It fails the way checkLock of the
+  # purifier library fails, with the problems joined by newlines. `setup`
+  # writes $TMPDIR/lock.json and $TMPDIR/src.
   expectLockFailure =
     name: pattern: setup:
     runCommand name { nativeBuildInputs = [ pkgs.nix ]; } ''
@@ -54,7 +56,8 @@ let
       cp -r ${../nix/lib} "$TMPDIR/lib"
       ${setup}
       if nix-instantiate --eval --strict --readonly-mode --store dummy:// \
-        -E "(import $TMPDIR/lib/lock.nix { lockFile = $TMPDIR/lock.json; src = $TMPDIR/src; }).packages" \
+        -E "let read = import $TMPDIR/lib/lock.nix { lockFile = $TMPDIR/lock.json; src = $TMPDIR/src; };
+            in if read.problems == [ ] then read.lock.packages else throw (builtins.concatStringsSep \"\n\" read.problems)" \
         > "$TMPDIR/out" 2>&1; then
         echo "the evaluation succeeded; expected a failure that says: "${lib.escapeShellArg pattern} >&2
         exit 1
@@ -72,14 +75,15 @@ let
     rm "$TMPDIR/src/opam-purifier.lock.json"
   '';
 
-  # hello's lockfile without the archive of one package, re-hashed so that
-  # it is intact. The fetch of that archive fails when opam asks for it.
+  # workspace's lockfile without the archive of its URL pin, which has no
+  # checksum and so is an entry the lockfile keeps, re-hashed so that it is
+  # intact. The fetch of that archive fails when opam asks for it.
   missing =
     let
-      original = builtins.fromJSON (builtins.readFile helloLock);
+      original = builtins.fromJSON (builtins.readFile ./fixtures/workspace/opam-purifier.lock.json);
       dropped = lib.findFirst (
-        d: d ? url && lib.hasInfix "/fmt-" d.url
-      ) (throw "the hello fixture has no archive of fmt") original.downloads;
+        d: d ? url && lib.hasInfix "/uutf/" d.url
+      ) (throw "the workspace fixture keeps no archive of uutf") original.downloads;
       edited = removeAttrs original [ "lockHash" ] // {
         downloads = lib.filter (d: d != dropped) original.downloads;
       };
@@ -91,7 +95,7 @@ let
       inherit dropped;
       project = import ../nix/lib/project.nix { inherit purifier; } {
         inherit pkgs;
-        src = withoutLockfile ./fixtures/hello;
+        src = withoutLockfile ./fixtures/workspace;
         lockFile = builtins.toFile "opam-purifier.lock.json" "${text}\n";
       };
     };
@@ -140,10 +144,70 @@ in
       touch $out
     '';
 
-  # `fetches` lists the download entries the lockfile holds.
+  # `fetches` holds the entries derived from the opam files: hello's
+  # lockfile keeps none, and the archive of fmt comes from fmt's opam file,
+  # at opam's download cache path with opam's cache as a mirror.
   hello-fetches =
-    assert hello.fetches == (builtins.fromJSON (builtins.readFile helloLock)).downloads;
+    let
+      fmt = lib.findFirst (d: lib.hasInfix "/fmt-" (d.url or "")) null hello.fetches;
+    in
+    assert (builtins.fromJSON (builtins.readFile helloLock)).downloads == [ ];
+    assert fmt != null;
+    assert lib.hasPrefix "download-cache/" fmt.path;
+    assert lib.any (lib.hasPrefix "https://opam.ocaml.org/cache/") fmt.mirrors;
+    assert lib.hasPrefix "sha" fmt.hash;
+    assert fmt.systems == null;
     runCommand "hello-fetches" { } "touch $out";
+
+  # The Nix parser of opam files reads the same sources as the command
+  # does, on every opam file the real lockfiles use.
+  parser-agrees =
+    let
+      derivedOf =
+        lockFile:
+        import ../nix/lib/derive.nix {
+          inherit lib;
+          lock =
+            (import ../nix/lib/lock.nix {
+              inherit lockFile;
+              src = null;
+            }).lock;
+        };
+      derivations = map derivedOf [
+        helloLock
+        ./fixtures/workspace/opam-purifier.lock.json
+        ./real-world/uri/opam-purifier.lock.json
+      ];
+      sources = lib.foldl' (a: d: a // d.sources) { } derivations;
+      texts = lib.foldl' (a: d: a // d.opamTexts) { } derivations;
+    in
+    runCommand "parser-agrees" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+      python3 -I ${./check_parser.py} ${cli}/libexec/opam-purifier.py \
+        ${builtins.toFile "sources.json" (builtins.toJSON sources)} \
+        ${pkgs.linkFarm "opam-files" (
+          lib.mapAttrsToList (name: text: {
+            inherit name;
+            path = builtins.toFile "opam-file" text;
+          }) texts
+        )}
+      touch $out
+    '';
+
+  # readLock gives the lock in memory of the purifier contract.
+  hello-read-lock =
+    let
+      read = readLock { src = ./fixtures/hello; };
+    in
+    assert read.purifier == "opam-purifier";
+    assert read.problems == [ ];
+    assert read.entries == hello.fetches;
+    assert read.outputs.hello.version == "0.1.0";
+    assert
+      (readLock {
+        src = ./fixtures/stale;
+        lockFile = helloLock;
+      }).problems != [ ];
+    runCommand "hello-read-lock" { } "touch $out";
 
   workspace-package = workspace.packages.beta;
 

@@ -1,197 +1,264 @@
 # opam-purifier
 
 opam-purifier is a command and a Nix library for [opam](https://opam.ocaml.org)
-projects. It records the files opam wants to download in a lockfile, so that
-Nix can build the project in its sandbox. You do not commit any generated Nix
-files to your repository.
+projects. The command records what a project downloads in a lockfile, and
+the library builds the project in the Nix sandbox from it. You do not
+commit any generated Nix files to your repository. opam-purifier meets the
+[purifier contract](https://github.com/nix-purifiers/purifier/blob/main/CONTRACT.md)
+that every nix-purifier meets.
 
-## How it works
+## 1. Quickstart
 
-`opam-purifier lock` runs opam in an empty opam root, against the
-repositories you name. The default is opam.ocaml.org. For each Nix system
-(x86_64-linux and aarch64-linux), it lets opam solve the project's
-dependencies with that system's platform variables, and downloads what the
-solution needs. The lockfile `opam-purifier.lock.json` then holds:
-
-- the packages each system installs, by exact version, and the NixOS system
-  packages ("depexts") they need, which opam's metadata names as nixpkgs
-  attributes;
-- the opam file of every solved package, so that the build needs no copy of
-  the repository;
-- every archive, as a URL with SHA-256, fallback mirrors and the path in
-  opam's download cache;
-- every pinned or version-control source, as a git, Mercurial or Darcs
-  checkout at a fixed revision;
-- the files each of the project's packages installs. The lock run builds the
-  project in the Nix sandbox from the lockfile it has written, with the tests
-  running, and records what opam installed.
-
-If the project has opam lock files (`*.opam.locked`), the lock run solves
-with `--locked`, so opam's own versions decide.
-
-The build sets up an opam root with a repository made of the locked opam
-files, a download cache made of the locked archives, and a download command
-that serves only locked files. opam then installs the locked packages and
-the project, offline.
-
-## Use
-
-In the project root, where the opam files are:
+In the project root, where the opam files are, lock the project and commit
+the lockfile:
 
 ```zsh
 nix run github:nix-purifiers/opam-purifier -- lock
+git add opam-purifier.lock.json
 ```
 
-Commit `opam-purifier.lock.json`. `lock` does nothing while the opam files,
-opam lock files and lock options are unchanged; `relock` locks again
-anyway. The options are:
+`lock` runs opam in an empty opam root for each Nix system (x86_64-linux
+and aarch64-linux), solves the project's dependencies with that system's
+platform variables, and records the result. It then builds the project in
+the Nix sandbox, with its tests, to record the files each package installs.
 
-- `--repo NAME=URL`, once per repository, to resolve from repositories other
-  than opam.ocaml.org. `archive+URL` names an archive of a repository, such
-  as opam-repository at a commit:
-  `--repo default=archive+https://github.com/ocaml/opam-repository/archive/<commit>.tar.gz`.
-  opam.ocaml.org changes every day, so a relock against it may pick newer
-  versions; against an archive of a commit, a relock writes the same lockfile
-  byte for byte.
-- `--only PACKAGE`, once per package, to lock some of the project's packages
-  and leave the others out, such as a benchmark package with heavy
-  dependencies. The default is every package with an opam file.
-- `--tool PACKAGE`, once per package, to lock a tool for the interactive mode
-  only, such as `ocaml-lsp-server` or `ocamlformat`. opam solves the tools
-  together with the project, so they agree on shared versions, and the Nix
-  build leaves them out.
-- `--without-test`, to leave the test dependencies out. By default they are
-  locked, and the build runs the tests.
-- `--with-doc`, to lock the documentation dependencies too.
-
-The lockfile remembers the options for the next `lock` and `relock`.
-
-The flake's `overlays.default` adds `buildOpamProject` to a package set:
+Build the project from a flake:
 
 ```nix
-{ buildOpamProject }:
-(buildOpamProject { src = ./.; }).packages.hello
+{
+  inputs.opam-purifier.url = "github:nix-purifiers/opam-purifier";
+  inputs.nixpkgs.follows = "opam-purifier/nixpkgs";
+
+  outputs =
+    { nixpkgs, opam-purifier, ... }:
+    let
+      pkgs = nixpkgs.legacyPackages.x86_64-linux;
+      project = opam-purifier.lib.opam-purifier.buildOpamProject {
+        inherit pkgs;
+        src = ./.;
+      };
+    in
+    {
+      packages.x86_64-linux.default = project.packages.hello;
+      checks.x86_64-linux.tests = project.tests;
+    };
+}
 ```
 
-The builder returns:
+The builder takes `pkgs`, `src`, `lockFile` (the default is
+`opam-purifier.lock.json` in `src`), `fetchers`, `name`, `releasePackage`,
+`nativeBuildInputs`, `buildInputs` (for libraries that the depexts of the
+locked packages do not name) and `srcFilter`. `nix/lib/project.nix`
+documents each one. It returns:
 
 | Attribute | What it is |
 |---|---|
 | `packages.<name>` | the files the project's package `<name>` installs; `files."<path>"` names each one, and `executables.<name>` each one under `bin/` |
-| `switch` | an opam switch at `_opam`, with the locked dependencies and the project's packages installed |
-| `releases.<name>` | the reproducible source archive `<name>-<version>.tar.gz` for publishing |
-| `state` | the offline repository, download cache and sources the build installs from |
+| `tests` | the project built with its tests, which opam runs as it installs each package |
+| `release` | the reproducible source archive `<name>-<version>.tar.gz` that `publish` uploads |
+| `fetches` | the entries of the `purifier` library that the build fetches, for SBOM, license and vulnerability tools |
 
 Nix knows every name in the table when it evaluates, from the lockfile.
-Its arguments are `src`, `lockFile`, `doCheck`, `nativeBuildInputs`,
-`buildInputs` (for libraries the depexts do not name), `srcFilter`, and
-`fetchurl` and `fetchgit` (for credentials or mirrors).
-`nix/lib/build-opam-project.nix` documents each one.
-
-The builder fails evaluation, with the command to run, when the lockfile was
-made from other opam files than the ones in `src`, when the lockfile was
-changed after `opam-purifier lock` wrote it (it carries a hash of its own
-content), or when it is not a lockfile. A download that does not match its
-locked hash fails the build, and so does a file opam asks for that the
-lockfile does not hold, with the URL and the command to run.
+`lib.opam-purifier.readLock { src, lockFile }` gives the lock in memory of
+the contract: `{ purifier, entries, outputs, problems }`.
 
 The compiler is the one the solution holds. opam usually picks
 `ocaml-base-compiler`, and the build compiles it from source, offline, from
 the locked archive.
 
-### Interactive mode
+## 2. Everyday loop
 
 ```zsh
-opam-purifier install
-opam-purifier opam exec -- dune build
-opam-purifier opam exec -- dune test
+opam-purifier prefetch
+source .opam-purifier/env.sh
+dune build
+dune test
 ```
 
-For an editor, lock the language server as a tool:
+`prefetch` sets up the local switch `_opam` with the locked dependencies,
+and writes `.opam-purifier/env.sh`. Sourcing it puts the build tools, the
+system libraries the depexts name, and the switch on `PATH`. Put the same
+line in an `.envrc` for direnv. From there `dune`, `opam` and your editor
+work as they do in any opam project.
+
+The `opam` in that environment runs on a root that holds only the locked
+packages, with a download command that serves only locked files. An
+`opam install` of anything else fails with a message that names
+`opam-purifier lock`.
+
+To add a dependency, add it to the opam file, then run:
 
 ```zsh
-opam-purifier lock --tool ocaml-lsp-server
-opam-purifier install
+opam-purifier lock
+opam-purifier prefetch
 ```
 
-The server is then `_opam/bin/ocamllsp`. The switch belongs to the
-purifier's opam root (`.opam-purifier/root`), not to your own, so configure
-the editor to start `opam-purifier opam exec -- ocamllsp` as its language
-server command, or `_opam/bin/ocamllsp` with `OPAM_SWITCH_PREFIX` set to
-`_opam`. To add or upgrade a dependency, edit the opam file, then run
-`opam-purifier lock` and `opam-purifier install`.
+`lock` solves again, and `update` re-resolves:
 
-`install` builds the offline state of the lockfile with Nix, keeps it alive
-with a GC root under `.opam-purifier/`, and creates the local switch
-`_opam` with the locked dependencies, offline. `opam-purifier opam ARGS`
-runs opam on that switch with the same offline download command, so opam
-refuses any package the lockfile does not hold, with a hint to relock.
-Both run inside a Nix shell with the tools of the sandboxed build (a C
-toolchain, make, opam's helpers) and the system packages the depexts name,
-so the local switch builds the way the Nix build does.
+```zsh
+opam-purifier update
+opam-purifier update fmt cmdliner
+```
+
+`lock` keeps the commits of the git repositories that the lockfile records,
+so a relock of an unchanged project writes the lockfile byte for byte.
+`update` moves each git repository to the commit its ref names now, for all
+packages or the ones named, and the packages it leaves alone stay at their
+locked versions. When the project has opam lock files (`*.opam.locked`),
+`lock` solves with `--locked` so that opam decides the versions, and
+`update` writes the lock files again from the build.
+
+`lock` takes these options, and remembers them for the next run:
+
+- `--repo NAME=URL`, once per repository, to resolve from repositories other
+  than the default, which is opam-repository on GitHub. `archive+URL` names
+  an archive of a repository, such as opam-repository at a commit:
+  `--repo default=archive+https://github.com/ocaml/opam-repository/archive/<commit>.tar.gz`.
+  `git+URL#REF` names a git repository.
+- `--only PACKAGE`, once per package, to lock some of the project's packages
+  and leave the others out, such as a benchmark package with heavy
+  dependencies. The default is every package with an opam file.
+- `--tool PACKAGE`, once per package, to lock a tool for the everyday loop
+  only; see the Editor section.
+- `--without-test` and `--with-test` choose whether the test dependencies
+  are locked, which they are by default. `--with-doc` and `--without-doc`
+  do the same for the documentation dependencies.
+
+The lockfile can live outside the project. Every command takes
+`--lockfile PATH`, or reads the environment variable
+`OPAM_PURIFIER_LOCKFILE`, and the builder takes the same path as
+`lockFile`. A packaging flake can build a project whose author does not
+change it, with the lockfile kept in the packaging flake. Its dev shell can
+set the variable to the path it passes as `lockFile`. `prefetch` then keeps
+`.opam-purifier`, with the garbage-collector roots and `env.sh`, beside the
+lockfile.
 
 ### Publishing
 
 ```zsh
-opam-purifier publish hello
-opam-purifier publish hello --url https://example.org/hello-0.1.0.tar.gz --repository ~/opam-repository
+opam-purifier publish
+opam-purifier publish --url https://example.org/hello-0.1.0.tar.gz --repository ~/opam-repository
 ```
 
-`publish` builds the package's release archive with Nix and prints its
-checksums. Upload the archive. With `--url`, it checks that the URL serves
-the same bytes, adds a `url` section with the checksums to the package's
-opam file, and writes it into a checkout of the target repository
-(`--repository`), for a pull request. Without `--repository`, it hands the
-URL and the opam file to `opam-publish`.
+`publish` builds the `release` archive with Nix and prints its checksums.
+Upload the archive. With `--url`, it checks that the URL serves the same
+bytes, adds a `url` section with the checksums to the opam file of each
+package of the project, and writes them into a checkout of the target
+repository (`--repository`), for a pull request. Without `--repository`, it
+hands the URL and the opam files to `opam-publish`.
 
-## Sources
+## 3. Offline work
+
+After `prefetch`, the everyday loop works with the network cut off.
+`prefetch` puts the following in the Nix store, and keeps it there with
+garbage-collector roots under `.opam-purifier`, beside the lockfile:
+
+- the repository the locked packages come from, and every locked download:
+  archives, git, Mercurial and Darcs checkouts, and the sources of pins;
+- the tools the lockfile holds (`--tool`);
+- the environment of the sandboxed build: the C toolchain, `make`, `opam`
+  and what it runs to unpack sources, and the system packages the depexts
+  name.
+
+The `conformance-offline` check cuts the network off in a network
+namespace and runs `dune build`, `dune test` and a program from the
+`hello` fixture, for x86_64-linux and aarch64-linux in CI.
+
+## 4. Editor
+
+Lock the language server and the formatter as tools:
+
+```zsh
+opam-purifier lock --tool ocaml-lsp-server --tool ocamlformat
+opam-purifier prefetch
+```
+
+opam solves the tools together with the project, so they agree on shared
+versions, and the Nix build leaves them out. `prefetch` installs them into
+`_opam`, and `source .opam-purifier/env.sh` puts `ocamllsp` and
+`ocamlformat` on `PATH`. Start the editor from that environment, or from
+direnv. The server runs offline.
+
+## 5. Errors and fixes
+
+The commands and the Nix library fail with a message that names the fix.
+
+| What happened | What the message says |
+|---|---|
+| The opam files changed after the lock | `was made from other opam files than the ones in <src>; run `opam-purifier lock``. |
+| The lockfile was edited by hand | `was changed after `opam-purifier lock` wrote it (its lockHash does not match its content); run `opam-purifier lock``. |
+| The lockfile is cut off or overwritten | `is not a lockfile that `opam-purifier lock` wrote (it is not a whole JSON object); run `opam-purifier lock` to write it again`. |
+| The lockfile does not exist | `does not exist; run `opam-purifier lock` in the project, and add the lockfile to the repository`. |
+| The lockfile has another format version | `has lock format version N; this library reads version M`. Run `opam-purifier lock` with the matching version. |
+| opam asks for a file the lockfile does not hold | `<url> is not in the lockfile; run `opam-purifier lock``. |
+| `opam install` of an unlocked package in the everyday loop | `opam installs only what the lockfile holds`, with the steps to add a dependency or a tool. |
+| A download does not match its locked hash | the build fails with Nix's hash mismatch error. |
+| A package installs other files on the other system | the build fails and names the missing file; run `opam-purifier lock` on that system. |
+
+## 6. Sources supported and refused
 
 | Source | How the lock keeps it |
 |---|---|
-| a repository archive with checksums | a file entry at its opam download cache path, with opam.ocaml.org's cache as a mirror |
-| an archive without checksums, such as a `pin-depends` URL | a file entry, served to opam by URL |
+| a repository archive with a sha256 or sha512 checksum | nothing: Nix derives the download from the package's opam file, at opam's download cache path, with opam's cache as a mirror |
+| an archive without such a checksum, such as an md5-only source or a `pin-depends` URL | a file entry, with the SHA-256 the lock run computed |
 | `git+https://…`, `git+ssh://…` | a git entry with submodules, at the commit of the ref; SSH URLs are fetched over HTTPS from the same host |
-| `hg+https://…` | a Mercurial entry |
+| `hg+https://…` | a Mercurial entry, at the node the ref names |
 | `darcs+https://…` | a Darcs entry, by tag when the URL names one, otherwise by the context file of the head the lock run saw |
 | a `pin-depends` path inside the project | the project's own directory |
+| a repository as `archive+URL` or `git+URL#REF` | its URL and hash, or its commit; Nix fetches it at evaluation and reads the opam files from it |
+| any other repository | a copy of the opam files of the packages solved from it |
 
-A `pin-depends` path outside the project stops the lock run, since the
-sandbox cannot see it. Move the package into the project or pin it by URL.
+Refused:
 
-## Tests
+- A `pin-depends` path outside the project stops the lock run, since the
+  sandbox cannot see it. Move the package into the project or pin it by URL.
+- Subversion, Bazaar, Fossil, Pijul and CVS sources of opam packages. The
+  library fetches them, but the lock run does not read them yet.
 
-`nix flake check` builds the CLI, whose install check runs the unit tests of
-the opam file parser, the source URLs, the download cache paths and the
-lockfile hashes (`tests/test_opam_purifier.py`). It builds the fixtures under
-`tests/fixtures` from their committed lockfiles in the sandbox: `hello` (an
-executable, a library and a test, on repository archives) and `workspace`
-(two local packages, a git pin and a URL pin without a checksum). It also
-runs what they build, checks the recorded outputs and the release archive,
-and checks that a stale lockfile fails evaluation.
-
-`tests/interactive.sh` runs what needs the network or runs outside the
-sandbox: a relock of each fixture against its pinned repository archive,
-compared byte for byte with the committed lockfile; the interactive mode with
-dune and a `--tool`; opam lock files; `publish`; the failures for an edited,
-malformed or tampered lockfile, a missing download and stale opam files; and
-a custom repository with a git source, Darcs pins by tag and by context, and
-a Mercurial pin, each from repositories the script makes and serves itself.
-CI runs both on x86_64-linux and aarch64-linux.
-
-## Limits
+Limits:
 
 - **Two systems.** The lock covers x86_64-linux and aarch64-linux. opam
   supports other platforms, but the Nix library builds only these.
-- **Installed files come from x86_64 or aarch64, whichever ran the lock.**
-  The lock run records the outputs from its own system's build. A package
-  that installs different files on the other system fails that system's
-  build with a message to relock there.
+- **Installed files come from the system that ran the lock.** The lock run
+  records the outputs from the build on its own system. A package that
+  installs different files on the other system fails the build there, with
+  a message to lock on that system.
+- **The repository fetch is Nix's own.** The repository named as `archive`
+  or `git` is fetched at evaluation with `builtins.fetchTarball` or
+  `builtins.fetchGit`, so that Nix can read the opam files with no
+  import-from-derivation. That fetch does not go through `fetchers`, and it
+  needs network access, or a store that already holds the repository, at
+  evaluation. A repository kept as copied files has no such fetch.
+- **opam files are parsed twice.** The command and Nix each parse the
+  `url` and `extra-source` sections of an opam file, because the lockfile
+  keeps no entry for a source that its opam file already describes. The
+  `parser-agrees` check compares the two parsers on every opam file of the
+  fixtures and of ocaml-uri.
 
-## Credit
+## 7. Real-world projects
 
-The purifier idea was inspired by nixcloud's
-[cargo (libnix)](https://github.com/nixcloud/cargo). The design follows
-[sbt-purifier](https://github.com/nix-purifiers/sbt-purifier).
+| Project | Pinned at | What runs |
+|---|---|---|
+| [mirage/ocaml-uri](https://github.com/mirage/ocaml-uri) | v4.4.0 (`c336c79`) | `lock --only uri --only uri-re --only uri-sexp` against opam-repository at `2ffc351`, with the lockfile kept outside the source in `tests/real-world/uri`; `nix flake check` builds `uri`, `uri-re` and `uri-sexp` in the sandbox with their tests, including the test in the `fuzz` directory of `uri-re`, which uses `uri` and `crowbar` without declaring them |
+
+The `hello` and `workspace` fixtures under `tests/fixtures` cover the rest:
+a library, an executable and a test on repository archives, local packages
+that depend on each other, a git pin and a URL pin without a checksum. The
+`tests/interactive.sh` script also locks and builds a custom git
+repository, Darcs pins by tag and by context, and a Mercurial pin, each
+from repositories the script makes and serves itself. CI runs all of it on
+x86_64-linux and aarch64-linux.
+
+The everyday loop (`prefetch`, `dune build`, `dune test`, the editor tools)
+runs on the `hello` fixture in CI. It has not run on ocaml-uri.
+
+## 8. Credits
+
+The purifier idea was inspired by the cargo (libnix) project of nixcloud:
+[nixcloud/cargo](https://github.com/nixcloud/cargo). The design follows
+[sbt-purifier](https://github.com/nix-purifiers/sbt-purifier), and the
+download entries and the lock in memory come from the shared
+[purifier](https://github.com/nix-purifiers/purifier) library.
 
 ## License
 

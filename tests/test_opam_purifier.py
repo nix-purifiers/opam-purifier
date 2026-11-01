@@ -98,6 +98,14 @@ class SourcesTest(unittest.TestCase):
         self.assertEqual(source["mirrors"], ["https://mirror.example.org/foo-1.0.tbz"])
         self.assertEqual(len(source["checksums"]), 1)
 
+    def test_filter_after_an_operator(self):
+        text = (
+            'depends: "a" | "b" | "c" {= "1"}\n'
+            'url { src: "https://example.org/foo-1.0.tbz" checksum: "md5=00" }\n'
+        )
+        (source,) = op.sources_of(text)
+        self.assertEqual(source["src"], "https://example.org/foo-1.0.tbz")
+
     def test_pin_depends(self):
         one = op.pin_depends_of('pin-depends: ["a.1" "git+https://x/a.git"]\n')
         self.assertEqual(one, [("a.1", "git+https://x/a.git")])

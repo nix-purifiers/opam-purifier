@@ -15,6 +15,10 @@
 #                        package the lock does not hold and names the
 #                        command to run, and a tool locked with --tool is
 #                        installed
+#   conformance-update   `update` moves a package of a git repository that
+#                        `lock` keeps at the commit the lockfile records, and
+#                        the result builds from a lockfile that passes the
+#                        stale check
 #   conformance-rebuild  `nix build --rebuild` of the switch of hello gives
 #                        the same output
 #   lockfiles            with opam's own lock file beside the opam file,
@@ -59,6 +63,9 @@ darcs="$(nix build --no-link --print-out-paths 'nixpkgs#darcs')/bin/darcs"
 hg="$(nix build --no-link --print-out-paths 'nixpkgs#mercurial')/bin/hg"
 git="$(nix build --no-link --print-out-paths 'nixpkgs#git')/bin/git"
 util_linux="$(nix build --no-link --print-out-paths 'nixpkgs#util-linux.bin')/bin"
+curl="$(nix build --no-link --print-out-paths 'nixpkgs#curl.bin')/bin/curl"
+tar="$(nix build --no-link --print-out-paths 'nixpkgs#gnutar')/bin/tar"
+gzip="$(nix build --no-link --print-out-paths 'nixpkgs#gzip^out')/bin/gzip"
 author="nix-purifiers <nix-purifiers@example.invalid>"
 
 fixture() {
@@ -73,7 +80,7 @@ fixture() {
 build() {
   local src="$1" attr="$2"
   nix build --no-link --print-out-paths --impure --expr "
-    let flake = builtins.getFlake \"$root\";
+    let flake = builtins.getFlake \"git+file://$root\";
         pkgs = flake.inputs.nixpkgs.legacyPackages.\${builtins.currentSystem};
     in (flake.lib.opam-purifier.buildOpamProject { inherit pkgs; src = $src; }).$attr"
 }
@@ -87,6 +94,16 @@ offline() {
     sudo --preserve-env env "PATH=$PATH" "$util_linux/unshare" --net -- \
       "$util_linux/setpriv" --reuid="$(id -u)" --regid="$(id -g)" --clear-groups -- "$@"
   fi
+}
+
+# Runs a script in the environment of the everyday loop of a project.
+in_env() {
+  local dir="$1" script="$2"
+  bash -c "
+    set -euo pipefail
+    cd '$dir'
+    source .opam-purifier/env.sh
+    $script"
 }
 
 # Runs a script in the environment of the everyday loop of a project,
@@ -216,8 +233,8 @@ section_conformance-relock() {
   # ocaml-uri, at the commit tests/default.nix builds, with its lockfile
   # outside the source.
   mkdir -p "$work/uri"
-  curl -fsSL https://github.com/mirage/ocaml-uri/archive/c336c796f4deb8979a4c7ceea3bef34b46240623.tar.gz |
-    tar -xz -C "$work/uri" --strip-components=1
+  "$curl" -fsSL https://github.com/mirage/ocaml-uri/archive/c336c796f4deb8979a4c7ceea3bef34b46240623.tar.gz |
+    "$gzip" -dc | "$tar" -x -C "$work/uri" --strip-components=1
   cp "$root/tests/real-world/uri/opam-purifier.lock.json" "$work/uri.lock.json"
   chmod u+w "$work/uri.lock.json"
   (cd "$work/uri" && "$cli" lock --lockfile "$work/uri.lock.json")
@@ -257,12 +274,82 @@ section_conformance-rebuild() {
   nix build --no-link --rebuild "$root#checks.$system.conformance-rebuild"
 }
 
+section_conformance-update() {
+  echo "== conformance-update"
+  local repo project
+  commit_repo() {
+    (cd "$repo" && "$git" add -A && "$git" -c user.name=nix-purifiers -c user.email=nix-purifiers@example.invalid commit --quiet -m "$1")
+  }
+  write_virtual() {
+    mkdir -p "$repo/packages/lambda/lambda.$1"
+    cat >"$repo/packages/lambda/lambda.$1/opam" <<EOF
+opam-version: "2.0"
+synopsis: "A package with no sources, version $1"
+maintainer: "nix-purifiers"
+EOF
+  }
+  # An opam repository in a git repository, with lambda.1 in it.
+  repo="$work/update-repository"
+  mkdir -p "$repo"
+  echo 'opam-version: "2.0"' >"$repo/repo"
+  (cd "$repo" && "$git" init --quiet -b main)
+  write_virtual 1
+  commit_repo "Add lambda 1"
+  # A project that depends on lambda, with opam's own lock file at lambda.1.
+  project="$work/update-project"
+  mkdir -p "$project/bin"
+  echo '(lang dune 3.0)' >"$project/dune-project"
+  cat >"$project/up.opam" <<EOF
+opam-version: "2.0"
+name: "up"
+version: "1"
+synopsis: "An opam-purifier update test project"
+maintainer: "nix-purifiers"
+depends: [ "ocaml" "dune" "lambda" ]
+build: [ ["dune" "build" "-p" name] ]
+EOF
+  echo '(executable (name up) (public_name up))' >"$project/bin/dune"
+  echo 'let () = print_endline "up"' >"$project/bin/up.ml"
+  local archive=https://github.com/ocaml/opam-repository/archive/2ffc3518756432a5bea7cda8ae467ea8b4e0362a.tar.gz
+  (cd "$project" && "$cli" lock --repo "default=archive+$archive" --repo "custom=git+file://$repo")
+  grep -q '"lambda.1"' "$project/opam-purifier.lock.json"
+  # opam's own lock file for the project at these versions, which the build
+  # writes, and a lock against it.
+  cp "$(build "$project" packages.up.switch)/nix-support/opam-locked/up.opam.locked" "$project/up.opam.locked"
+  chmod u+w "$project/up.opam.locked"
+  grep -q '"lambda" {= "1"}' "$project/up.opam.locked"
+  (cd "$project" && "$cli" lock)
+  grep -q '"lambda.1"' "$project/opam-purifier.lock.json"
+  # A new version appears in the repository. `lock` keeps the commit the
+  # lockfile records, and so the version.
+  write_virtual 2
+  commit_repo "Add lambda 2"
+  (cd "$project" && "$cli" lock)
+  grep -q '"lambda.1"' "$project/opam-purifier.lock.json"
+  # `update` moves it, and the result builds from a lockfile that passes
+  # the stale check.
+  (cd "$project" && "$cli" update lambda)
+  grep -q '"lambda.2"' "$project/opam-purifier.lock.json"
+  if grep -q '"lambda.1"' "$project/opam-purifier.lock.json"; then
+    echo "update left lambda.1 in the lockfile" >&2
+    exit 1
+  fi
+  grep -q '"lambda" {= "2"}' "$project/up.opam.locked"
+  [ "$("$(build "$project" packages.up)/bin/up")" = "up" ]
+  # Both lockfiles pass the stale check: `lock` finds nothing to change.
+  cp "$project/opam-purifier.lock.json" "$work/update-after.json"
+  (cd "$project" && "$cli" lock)
+  cmp "$work/update-after.json" "$project/opam-purifier.lock.json"
+  # A package that is not in the lockfile is refused.
+  expect_failure 'nothing is not in' sh -c "cd '$project' && '$cli' update nothing"
+}
+
 section_lockfiles() {
   echo "== lockfiles"
   local dir
   dir="$(fixture hello)"
   (cd "$dir" && "$cli" prefetch)
-  in_loop "$dir" 'opam lock .'
+  in_env "$dir" 'opam lock .'
   [ -f "$dir/hello.opam.locked" ]
   (cd "$dir" && "$cli" lock)
   "$python" - "$dir/opam-purifier.lock.json" "$dir/hello.opam.locked" <<'EOF'
@@ -307,24 +394,36 @@ EOF
 
 section_negative() {
   echo "== negative"
-  local dir
+  local dir wdir
   dir="$(fixture hello)"
   cp "$dir/opam-purifier.lock.json" "$work/edited.json"
   # A lockfile edited by hand, with its lockHash left as it was.
-  rewrite_lock "$dir/opam-purifier.lock.json" 'lock["downloads"][0]["url"] = "https://example.invalid/x"' keep
+  rewrite_lock "$dir/opam-purifier.lock.json" 'lock["repositories"][0]["archive"] = "https://example.invalid/x.tar.gz"' keep
   expect_failure 'was changed after `opam-purifier lock` wrote it' sh -c "cd '$dir' && '$cli' prefetch"
   expect_failure 'was changed after `opam-purifier lock` wrote it' sh -c "cd '$dir' && '$cli' publish"
   # A malformed lockfile, kept outside the project.
   head -c 200 "$work/edited.json" >"$work/malformed.json"
   cp "$work/edited.json" "$dir/opam-purifier.lock.json"
   expect_failure 'run `opam-purifier lock` to write it again' sh -c "cd '$dir' && '$cli' prefetch --lockfile '$work/malformed.json'"
-  # A wrong download hash, re-hashed so that only the fetch can notice.
-  rewrite_lock "$dir/opam-purifier.lock.json" 'next(d for d in lock["downloads"] if "url" in d)["hash"] = "sha256-" + "A" * 43 + "="' rehash
-  expect_failure 'hash mismatch' build "$dir" packages.hello
+  # A wrong hash of the repository, re-hashed so that only the fetch can
+  # notice. Nix fetches the repository when it evaluates.
+  rewrite_lock "$dir/opam-purifier.lock.json" 'lock["repositories"][0]["hash"] = "sha256-" + "A" * 43 + "="' rehash
+  expect_failure 'mismatch' build "$dir" packages.hello
   # Opam files edited after the lock.
   cp "$work/edited.json" "$dir/opam-purifier.lock.json"
   echo '# edited' >>"$dir/hello.opam"
   expect_failure 'run `opam-purifier lock`' sh -c "cd '$dir' && '$cli' prefetch"
+  # The workspace fixture keeps a download entry, for the URL pin that has
+  # no checksum. A wrong hash there fails the build of the download.
+  wdir="$(fixture workspace)"
+  cp "$wdir/opam-purifier.lock.json" "$work/workspace-edited.json"
+  rewrite_lock "$wdir/opam-purifier.lock.json" 'next(d for d in lock["downloads"] if "url" in d)["hash"] = "sha256-" + "A" * 43 + "="' rehash
+  expect_failure 'hash mismatch' build "$wdir" packages.beta
+  # A lockfile without that entry: opam asks for the URL, and the download
+  # command names it and the command to run.
+  cp "$work/workspace-edited.json" "$wdir/opam-purifier.lock.json"
+  rewrite_lock "$wdir/opam-purifier.lock.json" 'lock["downloads"] = [d for d in lock["downloads"] if "url" not in d]' rehash
+  expect_failure 'the lockfile; run `opam-purifier lock`' build "$wdir" packages.beta
 }
 
 section_repository() {
@@ -422,7 +521,7 @@ EOF
 
 sections=("$@")
 if [ "${#sections[@]}" -eq 0 ]; then
-  sections=(conformance-relock conformance-offline conformance-rebuild lockfiles publish negative repository darcs hg)
+  sections=(conformance-relock conformance-offline conformance-rebuild conformance-update lockfiles publish negative repository darcs hg)
 fi
 for section in "${sections[@]}"; do
   "section_$section"

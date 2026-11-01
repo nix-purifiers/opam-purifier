@@ -38,27 +38,34 @@
   buildInputs ? [ ],
   # Filters the project root before it is copied into the store, as the
   # `filter` of builtins.path. The default leaves out version control,
-  # opam's local switch, the purifier's state, build outputs and the
-  # lockfile. Nix reads the lockfile at evaluation, and the build reads
-  # none of it, so the lock run can add the outputs to the lockfile
-  # without changing the switch it built.
+  # opam's local switch, the purifier's state, build outputs, the lockfile
+  # and opam's own lock files. Nix reads those at evaluation, and the
+  # build reads none of them, so the lock run can add the outputs to the
+  # lockfile, and `update` can write opam's lock files, without changing
+  # the switch they were built from.
   srcFilter ? null,
 }:
 let
   inherit (pkgs) lib stdenv;
   system = stdenv.hostPlatform.system;
 
-  lock = import ./lock.nix { inherit lockFile src; };
+  # The lock in memory, checked by the purifier library, which fails
+  # evaluation with the problems, each naming the command to run.
+  checked = purifier.checkLock (import ./read-lock.nix { inherit lib; } { inherit src lockFile; });
+  lock = builtins.seq checked (import ./lock.nix { inherit lockFile src; }).lock;
   solution = lock.forSystem system;
+  derived = import ./derive.nix { inherit lib lock; };
 
   state = import ./state.nix {
     inherit
       pkgs
       purifier
       lock
+      derived
       system
       fetchers
       ;
+    entries = purifier.entriesFor system checked;
   };
 
   defaultSrcFilter =
@@ -72,6 +79,7 @@ let
       || base == "_build"
       || base == ".opam-purifier"
       || base == "opam-purifier.lock.json"
+      || lib.hasSuffix ".opam.locked" base
       || lib.hasPrefix "result" base
     );
 
@@ -140,6 +148,11 @@ let
           ${lib.concatMapStrings (n: ''
             opam show --list-files ${lib.escapeShellArg n} > "$out/nix-support/opam-purifier-files/"${lib.escapeShellArg n}
           '') localNames}
+          # opam's own lock files of the project's packages, at the versions
+          # this switch installed, which `opam-purifier update` writes into
+          # a project that keeps them.
+          mkdir -p "$out/nix-support/opam-locked"
+          (cd "$out/nix-support/opam-locked" && opam lock ${lib.escapeShellArgs localNames} > /dev/null)
           runHook postBuild
         '';
         installPhase = ''
@@ -148,6 +161,13 @@ let
           # built from, the backups and the logs of the build go.
           rm -rf "$out/_opam/.opam-switch/sources" "$out/_opam/.opam-switch/build" \
             "$out/_opam/.opam-switch/backup" "$out/_opam/.opam-switch/packages/cache"
+          # opam records the modification time of every file it installs in
+          # <package>.changes. Nix sets the time of each file in the store to
+          # 1, so the recorded time becomes that, and two builds agree.
+          # opam also wraps a long entry onto a second line, depending on
+          # the length of the time it printed, so wrapped entries are joined.
+          find "$out/_opam/.opam-switch/install" -name '*.changes' \
+            -exec sed -z -i -E 's/(F:S[0-9]+T)[0-9.]+/\11/g; s/"\n +\{/" {/g' {} +
           runHook postInstall
         '';
         passthru = {
@@ -224,5 +244,5 @@ in
     lock
     ;
   packages = lib.listToAttrs (map (p: lib.nameValuePair p.name (mkPackage p)) lock.packages);
-  fetches = lock.downloads;
+  fetches = checked.entries;
 }

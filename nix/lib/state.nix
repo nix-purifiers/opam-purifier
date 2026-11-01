@@ -24,6 +24,10 @@
   pkgs,
   purifier,
   lock,
+  # What derive.nix derives from the opam files of the solved packages.
+  derived,
+  # The download entries of this system, from entriesFor.
+  entries,
   system,
   # Passed to fetchEntry and tree of the purifier library.
   fetchers,
@@ -39,7 +43,7 @@ let
     {
       inherit pkgs;
       name = "opam-purifier-downloads";
-      entries = lock.downloads;
+      inherit entries;
     }
     // fetchers
   );
@@ -47,6 +51,9 @@ let
   repositoryFiles = lib.concatMapStrings (
     entry: "${entry.path}\t${writeText (lock.storeName (baseNameOf entry.path)) entry.contents}\n"
   ) lock.repository;
+
+  # The package directories of the repositories Nix fetched.
+  repositoryDirs = lib.concatMapStrings (d: "${d.path}\t${d.source}\n") derived.repositoryDirs;
 
   # Every URL a file can be asked for: its upstream URL and its mirrors,
   # among them opam's own cache.
@@ -56,7 +63,7 @@ let
       path = fetch download;
     in
     lib.concatMapStrings (url: "${url}\t${path}\n") ([ download.url ] ++ download.mirrors)
-  ) lock.files;
+  ) (builtins.filter (d: d ? url) entries);
 
   # The pins, as `opam pin add` commands. A pin of a project directory
   # takes its path below the project root, which install-dependencies
@@ -183,6 +190,7 @@ pkgs.runCommand "opam-purifier-state"
   {
     inherit
       repositoryFiles
+      repositoryDirs
       fetchManifest
       offlineFetch
       patchShebangs
@@ -191,6 +199,7 @@ pkgs.runCommand "opam-purifier-state"
       ;
     passAsFile = [
       "repositoryFiles"
+      "repositoryDirs"
       "fetchManifest"
       "offlineFetch"
       "patchShebangs"
@@ -210,6 +219,16 @@ pkgs.runCommand "opam-purifier-state"
       mkdir -p "$(dirname "$out/repository/$rel")"
       cp "$target" "$out/repository/$rel"
     done < "$repositoryFilesPath"
+    while IFS=$'\t' read -r rel source; do
+      mkdir -p "$(dirname "$out/repository/$rel")"
+      cp -r --no-preserve=mode "$source" "$out/repository/$rel"
+    done < "$repositoryDirsPath"
+    # The fetched repositories stay alive as long as the state does.
+    echo ${
+      lib.concatStringsSep " " (
+        map toString (builtins.filter (x: x != null) (builtins.attrValues derived.trees))
+      )
+    } > $out/repositories
     for dir in download-cache sources; do
       if [ -d ${downloads}/$dir ]; then
         cp -r ${downloads}/$dir/. $out/$dir/
