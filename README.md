@@ -379,11 +379,8 @@ nix build --impure --expr '
 
 ## Credits
 
-The purifier idea was inspired by the cargo (libnix) project of nixcloud:
-[nixcloud/cargo](https://github.com/nixcloud/cargo). The design follows
-[sbt-purifier](https://github.com/nix-purifiers/sbt-purifier), and the
-download entries and the lock in memory come from the shared
-[purifier](https://github.com/nix-purifiers/purifier) library.
+The purifier idea was inspired by nixcloud's
+[cargo (libnix)](https://github.com/nixcloud/cargo).
 
 ## License
 
