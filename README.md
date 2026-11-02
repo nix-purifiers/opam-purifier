@@ -149,17 +149,23 @@ another one. The flake calls the builder directly:
 
 ```nix
 {
-  inputs.opam-purifier.url = "github:nix-purifiers/opam-purifier";
+  inputs.opam-purifier.url =
+    "github:nix-purifiers/opam-purifier";
   inputs.nixpkgs.follows = "opam-purifier/nixpkgs";
 
   outputs =
     { nixpkgs, opam-purifier, ... }:
     let
-      pkgs = nixpkgs.legacyPackages.x86_64-linux.extend opam-purifier.overlays.default;
-      project = pkgs.opam-purifier.buildOpamProject { src = ./.; };
+      pkgs =
+        nixpkgs.legacyPackages.x86_64-linux.extend
+        opam-purifier.overlays.default;
+      project = pkgs.opam-purifier.buildOpamProject {
+        src = ./.;
+      };
     in
     {
-      packages.x86_64-linux.default = project.packages.hello;
+      packages.x86_64-linux.default =
+        project.packages.hello;
       checks.x86_64-linux.tests = project.tests;
     };
 }
