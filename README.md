@@ -318,9 +318,10 @@ URIs. In your checkout of it, lock the three library packages, commit the
 lockfile with the project, and build the library from the checkout:
 
 ```zsh
+nix shell 'github:nix-purifiers/opam-purifier'
 git clone --branch v4.4.0 https://github.com/mirage/ocaml-uri
 cd ocaml-uri
-nix run github:nix-purifiers/opam-purifier -- lock \
+opam-purifier lock \
   --only uri --only uri-re --only uri-sexp
 git add opam-purifier.lock.json
 nix build --impure --expr 'let
@@ -345,7 +346,8 @@ To leave the repository as it is, write the lockfile beside the checkout and
 point the build at it:
 
 ```zsh
-nix run github:nix-purifiers/opam-purifier -- lock \
+nix shell 'github:nix-purifiers/opam-purifier'
+opam-purifier lock \
   --only uri --only uri-re --only uri-sexp \
   --lockfile ../uri.lock.json
 nix build --impure --expr 'let
