@@ -133,7 +133,9 @@ builder, so a developer in that shell runs the commands with no flag.
 
 ```zsh
 opam-purifier publish
-opam-purifier publish --url https://example.org/hello-0.1.0.tar.gz --repository ~/opam-repository
+opam-purifier publish --url \
+  https://example.org/hello-0.1.0.tar.gz --repository \
+  ~/opam-repository
 ```
 
 `publish` builds the `release` archive with Nix and prints its checksums.
@@ -217,15 +219,15 @@ For an ad hoc build, the builder can also be evaluated directly from the
 project root. Replace the example package name with one from your project:
 
 ```zsh
-nix build --impure --expr '
-  let
-    purifier = builtins.getFlake "github:nix-purifiers/opam-purifier";
-    pkgs = import purifier.inputs.nixpkgs {
-      system = builtins.currentSystem;
-      overlays = [ purifier.overlays.default ];
-    };
-  in
-  (pkgs.opam-purifier.buildOpamProject { src = ./.; }).packages.hello'
+nix build --impure --expr 'let
+  purifier = builtins.getFlake "github:nix-purifiers/opam-purifier";
+  pkgs = import purifier.inputs.nixpkgs {
+    system = builtins.currentSystem;
+    overlays = [ purifier.overlays.default ];
+  };
+in
+(pkgs.opam-purifier.buildOpamProject { src = ./.; })
+.packages.hello'
 ```
 
 This uses the purifier's pinned nixpkgs, matching the lock command above.
@@ -336,15 +338,15 @@ cd ocaml-uri
 nix run github:nix-purifiers/opam-purifier -- lock \
   --only uri --only uri-re --only uri-sexp
 git add opam-purifier.lock.json
-nix build --impure --expr '
-  let
-    purifier = builtins.getFlake "github:nix-purifiers/opam-purifier";
-    pkgs = import purifier.inputs.nixpkgs {
-      system = builtins.currentSystem;
-      overlays = [ purifier.overlays.default ];
-    };
-  in
-  (pkgs.opam-purifier.buildOpamProject { src = ./.; }).packages.uri'
+nix build --impure --expr 'let
+  purifier = builtins.getFlake "github:nix-purifiers/opam-purifier";
+  pkgs = import purifier.inputs.nixpkgs {
+    system = builtins.currentSystem;
+    overlays = [ purifier.overlays.default ];
+  };
+in
+(pkgs.opam-purifier.buildOpamProject { src = ./.; })
+.packages.uri'
 ```
 
 The repository also holds a benchmark package, `uri-bench`. `--only` locks
@@ -361,18 +363,17 @@ point the build at it:
 nix run github:nix-purifiers/opam-purifier -- lock \
   --only uri --only uri-re --only uri-sexp \
   --lockfile ../uri.lock.json
-nix build --impure --expr '
-  let
-    purifier = builtins.getFlake "github:nix-purifiers/opam-purifier";
-    pkgs = import purifier.inputs.nixpkgs {
-      system = builtins.currentSystem;
-      overlays = [ purifier.overlays.default ];
-    };
-  in
-  (pkgs.opam-purifier.buildOpamProject {
-    src = ./.;
-    lockFile = ../uri.lock.json;
-  }).packages.uri'
+nix build --impure --expr 'let
+  purifier = builtins.getFlake "github:nix-purifiers/opam-purifier";
+  pkgs = import purifier.inputs.nixpkgs {
+    system = builtins.currentSystem;
+    overlays = [ purifier.overlays.default ];
+  };
+in
+(pkgs.opam-purifier.buildOpamProject {
+  src = ./.;
+  lockFile = ../uri.lock.json;
+}).packages.uri'
 ```
 
 ## Credits
