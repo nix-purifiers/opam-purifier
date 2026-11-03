@@ -95,14 +95,18 @@ let
     filter = if srcFilter != null then srcFilter else defaultSrcFilter;
   };
 
+  # The values the lock run sets (platform_env in bin/opam-purifier). On
+  # macOS the family and distribution stay NixOS, whose depexts name
+  # nixpkgs attributes.
   platformEnv = {
     OPAMVAR_arch =
       {
         "x86_64-linux" = "x86_64";
         "aarch64-linux" = "arm64";
+        "aarch64-darwin" = "arm64";
       }
       .${system};
-    OPAMVAR_os = "linux";
+    OPAMVAR_os = if stdenv.hostPlatform.isDarwin then "macos" else "linux";
     OPAMVAR_os_family = "nixos";
     OPAMVAR_os_distribution = "nixos";
   };
@@ -179,6 +183,18 @@ let
         passthru = {
           inherit state lock;
         };
+      }
+      // lib.optionalAttrs stdenv.hostPlatform.isDarwin {
+        # opam records the build directory (the opam root, and the source of
+        # the project's packages, which it pins) and the build user. The
+        # Linux sandbox always builds in /build as nixbld. Darwin builds in a
+        # new directory, as one of several users, so the switch records the
+        # Linux values, and two builds agree.
+        postInstall = ''
+          top="''${NIX_BUILD_TOP%/}/"
+          grep -rlIFZ "$top" "$out/_opam/.opam-switch" | xargs -0 -r sed -i "s|$top|/build/|g"
+          sed -i 's/^  user: ".*"$/  user: "nixbld"/' "$out/_opam/.opam-switch/switch-config"
+        '';
       }
     );
 

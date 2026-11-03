@@ -44,14 +44,14 @@
 #
 # It runs from the repository root and needs nix with flakes and network
 # access. conformance-offline also needs a way to cut the network off:
-# unprivileged user namespaces, or sudo.
+# unprivileged user namespaces or sudo, and on macOS sandbox-exec.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 work="$(mktemp -d)"
 server_pids=()
 cleanup() {
-  for pid in "${server_pids[@]}"; do kill "$pid" 2>/dev/null || true; done
+  for pid in ${server_pids[@]+"${server_pids[@]}"}; do kill "$pid" 2>/dev/null || true; done
   chmod -R u+w "$work" 2>/dev/null || true
   rm -rf "$work"
 }
@@ -66,6 +66,7 @@ util_linux="$(nix build --no-link --print-out-paths 'nixpkgs#util-linux.bin')/bi
 curl="$(nix build --no-link --print-out-paths 'nixpkgs#curl.bin')/bin/curl"
 tar="$(nix build --no-link --print-out-paths 'nixpkgs#gnutar')/bin/tar"
 gzip="$(nix build --no-link --print-out-paths 'nixpkgs#gzip^out')/bin/gzip"
+sha256sum="$(nix build --no-link --print-out-paths 'nixpkgs#coreutils')/bin/sha256sum"
 author="nix-purifiers <nix-purifiers@example.invalid>"
 
 fixture() {
@@ -86,9 +87,12 @@ build() {
 }
 
 # Runs a command with the network cut off: in a new network namespace,
-# as the current user.
+# as the current user. macOS has no network namespaces; there its sandbox
+# denies the command the network.
 offline() {
-  if "$util_linux/unshare" --user --map-root-user --net true 2>/dev/null; then
+  if [ "$(uname)" = Darwin ]; then
+    sandbox-exec -p '(version 1) (allow default) (deny network-outbound (remote ip))' "$@"
+  elif "$util_linux/unshare" --user --map-root-user --net true 2>/dev/null; then
     "$util_linux/unshare" --user --map-root-user --net -- env OPAMROOTISOK=1 "$@"
   else
     sudo --preserve-env env "PATH=$PATH" "$util_linux/unshare" --net -- \
@@ -388,14 +392,15 @@ section_publish() {
   archive="$(cd "$dir" && "$cli" publish | sed -n 's|^opam-purifier: \(/nix/store/.*\.tar\.gz\)$|\1|p')"
   [ -f "$archive" ]
   mkdir -p "$work/served"
-  cp --no-preserve=mode "$archive" "$work/served/"
+  install -m 644 "$archive" "$work/served/"
   port="$(serve "$work/served")"
   url="http://127.0.0.1:$port/hello-0.1.0.tar.gz"
   mkdir -p "$work/repository"
   (cd "$dir" && "$cli" publish --url "$url" --repository "$work/repository")
   published="$work/repository/packages/hello/hello.0.1.0/opam"
   grep -q "src: \"$url\"" "$published"
-  grep -q "sha256=$(sha256sum "$archive" | cut -d' ' -f1)" "$published"
+  archive_sha256="$("$sha256sum" "$archive" | cut -d' ' -f1)"
+  grep -q "sha256=$archive_sha256" "$published"
   cat >"$work/opam-publish" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$@" > "$work/opam-publish.args"

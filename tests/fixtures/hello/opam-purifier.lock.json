@@ -76,6 +76,26 @@
       ],
       "tools": [],
       "depexts": []
+    },
+    "aarch64-darwin": {
+      "install": [
+        "base-bigarray.base",
+        "base-domains.base",
+        "base-nnp.base",
+        "base-threads.base",
+        "base-unix.base",
+        "dune.3.24.2",
+        "fmt.0.11.0",
+        "ocaml-base-compiler.5.2.1",
+        "ocaml-config.3",
+        "ocaml-options-vanilla.1",
+        "ocaml.5.2.1",
+        "ocamlbuild.0.16.1",
+        "ocamlfind.1.9.8",
+        "topkg.1.1.1"
+      ],
+      "tools": [],
+      "depexts": []
     }
   },
   "repositories": [
@@ -88,5 +108,5 @@
   "pins": [],
   "repository": [],
   "downloads": [],
-  "lockHash": "sha256:39fc82fede61a7c92ef5c04e41eda198cf72e8e4d6559e966e03ad949dacc14b"
+  "lockHash": "sha256:01e205faf9ecc813ec00ff92e1f781716b01091b91647038ab99d1d7adf39e74"
 }
