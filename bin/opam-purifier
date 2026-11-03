@@ -57,6 +57,7 @@ OPAM_CACHE = "https://opam.ocaml.org/cache"
 SYSTEMS = {
     "x86_64-linux": "x86_64",
     "aarch64-linux": "arm64",
+    "aarch64-darwin": "arm64",
 }
 
 
@@ -64,10 +65,10 @@ def platform_env(system):
     """opam's platform variables for a Nix system. The lock run and the
     sandboxed build set the same values, so that the `available` fields
     and the depexts evaluate the same way in both. NixOS is the
-    distribution whose depexts name nixpkgs attributes."""
+    distribution whose depexts name nixpkgs attributes, on macOS too."""
     return {
         "OPAMVAR_arch": SYSTEMS[system],
-        "OPAMVAR_os": "linux",
+        "OPAMVAR_os": "macos" if system.endswith("-darwin") else "linux",
         "OPAMVAR_os_family": "nixos",
         "OPAMVAR_os_distribution": "nixos",
     }
@@ -545,7 +546,10 @@ class LockRun:
             sri = run(
                 ["nix", "hash", "convert", "--hash-algo", "sha256", "--to", "sri", out[-2]], capture=True
             ).strip()
-            run(["cp", "-r", "--no-preserve=mode", out[-1], str(target)])
+            # A writable copy. macOS's cp, first on PATH there, has no
+            # --no-preserve.
+            run(["cp", "-R", out[-1], str(target)])
+            run(["chmod", "-R", "u+w", str(target)])
             record = {"name": repo["name"], "archive": archive_url, "hash": sri}
         elif url.startswith("git+"):
             fetch_url, ref = split_vcs(url)
@@ -1059,11 +1063,13 @@ def library():
 
 
 def current_system():
-    machine = os.uname().machine
-    for system in SYSTEMS:
-        if system.split("-")[0] == machine:
-            return system
-    fail(f"this machine ({machine}) is not one of the systems a lock covers")
+    uname = os.uname()
+    # macOS names the CPU arm64, where Nix names it aarch64.
+    machine = {"arm64": "aarch64"}.get(uname.machine, uname.machine)
+    system = f"{machine}-{uname.sysname.lower()}"
+    if system not in SYSTEMS:
+        fail(f"this machine ({system}) is not one of the systems a lock covers")
+    return system
 
 
 def nix_args(root, lock_path, locked_dir=None):
@@ -1148,12 +1154,15 @@ def prefetch(root, lock_path, locked_dir=None):
     )
     env.update(platform_env(current_system()))
     print("opam-purifier: installing the locked packages into _opam", file=sys.stderr)
+    # Nix writes the environment for bash 4 or later, so it runs in the bash
+    # the command was built with: the one on macOS's PATH is bash 3.2.
+    bash = os.environ.get("OPAM_PURIFIER_BASH", "bash")
     script = (
         f"source {shlex.quote(str(state_dir / 'shell-env'))} && "
-        f"bash {shlex.quote(str(state_link))}/bin/install-dependencies {shlex.quote(str(root))} "
+        f"{shlex.quote(bash)} {shlex.quote(str(state_link))}/bin/install-dependencies {shlex.quote(str(root))} "
         f"{shlex.quote(str(root))} --with-tools"
     )
-    run(["bash", "-c", script], env=env, cwd=root)
+    run([bash, "-c", script], env=env, cwd=root)
     (state_dir / "env.sh").write_text(
         ENV_SCRIPT.format(
             shell_env=shlex.quote(str(state_dir / "shell-env")),

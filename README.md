@@ -41,9 +41,10 @@ dune test
 
 `prefetch` sets up the local switch `_opam` with the locked dependencies,
 and writes `.opam-purifier/env.sh`. Sourcing it puts the build tools, the
-system libraries the depexts name, and the switch on `PATH`. Put the same
-line in an `.envrc` for direnv. From there `dune`, `opam` and your editor
-work as they do in any opam project.
+system libraries the depexts name, and the switch on `PATH`. It needs bash
+4 or later; macOS's `/bin/bash` is 3.2. Put the same line in an `.envrc`
+for direnv. From there `dune`, `opam` and your editor work as they do in
+any opam project.
 
 The `opam` in that environment runs on a root that holds only the locked
 packages, with a download command that serves only locked files. An
@@ -273,7 +274,7 @@ The commands and the Nix library fail with a message that names the fix.
 | opam asks for a file the lockfile does not hold | `<url> is not in the lockfile; run `opam-purifier lock``. |
 | `opam install` of an unlocked package in the development loop | `opam installs only what the lockfile holds`, with the steps to add a dependency or a tool. |
 | A download does not match its locked hash | the build fails with Nix's hash mismatch error. |
-| A package installs other files on the other system | the build fails and names the missing file; run `opam-purifier lock` on that system. |
+| A package installs other files on another system | the build fails and names the missing file; run `opam-purifier lock` on that system. |
 
 ## Supported language repositories
 
@@ -297,11 +298,13 @@ Not supported:
 
 Limits:
 
-- **Two systems.** The lock covers x86_64-linux and aarch64-linux. opam
-  supports other platforms, but the Nix library builds only these.
+- **Three systems.** The lock covers x86_64-linux, aarch64-linux and
+  aarch64-darwin. opam supports other platforms, but the Nix library builds
+  only these. On macOS, opam's `os` is `macos`, and the distribution stays
+  NixOS, so that the depexts name nixpkgs attributes there too.
 - **Installed files come from the system that ran the lock.** The lock run
   records the outputs from the build on its own system. A package that
-  installs different files on the other system fails the build there, with
+  installs different files on another system fails the build there, with
   a message to lock on that system.
 - **The repository fetch is Nix's own.** The repository named as `archive`
   or `git` is fetched at evaluation with `builtins.fetchTarball` or

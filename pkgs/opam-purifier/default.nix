@@ -9,6 +9,7 @@
   stdenvNoCC,
   makeWrapper,
   python3,
+  bash,
   opam,
   curl,
   gitMinimal,
@@ -54,6 +55,7 @@ stdenvNoCC.mkDerivation {
       --set OPAM_PURIFIER_LIB ${../../nix/lib} \
       --set OPAM_PURIFIER_NIXPKGS ${path} \
       --set OPAM_PURIFIER_PURIFIER ${library} \
+      --set OPAM_PURIFIER_BASH ${bash}/bin/bash \
       --suffix PATH : ${
         lib.makeBinPath [
           opam
