@@ -12,7 +12,7 @@
   # The `opam-purifier` command. It builds outside a flake with the source
   # of the purifier library, which the default package overlay passes.
   opam-purifier = callPackage ./opam-purifier {
-    version = builtins.replaceStrings [ "\n" ] [ "" ] (builtins.readFile ../version.txt);
+    version = import ./version.nix;
     purifierSource = null;
   };
 }
