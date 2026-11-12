@@ -56,11 +56,15 @@ let
   # The lock in memory, checked by the purifier library, which fails
   # evaluation with the problems, each naming the command to run.
   checked = purifier.checkLock (
-    import ./read-lock.nix { inherit lib; } { inherit src lockFile opamLocked; }
+    import ../../lib-overlays/default/read-lock.nix { inherit lib; } {
+      inherit src lockFile opamLocked;
+    }
   );
-  lock = builtins.seq checked (import ./lock.nix { inherit lockFile src opamLocked; }).lock;
+  lock =
+    builtins.seq checked
+      (import ../../lib-overlays/default/lock.nix { inherit lockFile src opamLocked; }).lock;
   solution = lock.forSystem system;
-  derived = import ./derive.nix { inherit lib lock; };
+  derived = import ../../lib-overlays/default/derive.nix { inherit lib lock; };
 
   state = import ./state.nix {
     inherit

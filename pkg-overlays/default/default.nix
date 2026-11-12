@@ -3,7 +3,7 @@
 # The default package overlay. It adds one attribute to the package set:
 # the scope `pkgs.opam-purifier`, made with lib.makeScope, which holds the
 # packages of pkgs/. `.buildOpamProject` is the builder
-# (nix/lib/build-opam-project.nix) and `.opam-purifier` is the command, to
+# (pkgs/build-opam-project/default.nix) and `.opam-purifier` is the command, to
 # which the overlay passes the source of the purifier library of this
 # flake's closure, for the builds the command runs outside a flake. A
 # package in an overlay takes the scope by name, as `{ opam-purifier }:`,

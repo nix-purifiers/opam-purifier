@@ -20,7 +20,7 @@ let
   pkgs = import nixpkgs { inherit system; };
   purifier = import purifierSource { inherit (pkgs) lib; };
 in
-import ./project.nix { inherit purifier; } {
+import ../build-opam-project/project.nix { inherit purifier; } {
   inherit
     pkgs
     src

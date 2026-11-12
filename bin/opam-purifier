@@ -353,7 +353,7 @@ def cache_path(checksum):
 def usable_checksum(checksums):
     """The first checksum Nix can fetch by, or None. Nix derives the
     download entry of a source with one from its opam file
-    (nix/lib/derive.nix), so the lockfile leaves the entry out."""
+    (lib-overlays/default/derive.nix), so the lockfile leaves the entry out."""
     for checksum in checksums:
         if re.fullmatch(r"sha256=[0-9a-f]{64}|sha512=[0-9a-f]{128}", checksum):
             return checksum
@@ -434,7 +434,7 @@ def definition_files(root, locked_dir=None):
 def definition_hash(root, options, locked_dir=None):
     """The hash of what decides the lock: the SHA-256 of a manifest with a
     line `<path>\\t<sha256>` for each definition file, then the line
-    `options\\t<options as compact JSON with sorted keys>`. nix/lib/lock.nix
+    `options\\t<options as compact JSON with sorted keys>`. lib-overlays/default/lock.nix
     computes the same manifest, so the builder notices a stale lockfile."""
     lines = []
     for name, path in definition_files(root, locked_dir):
@@ -446,7 +446,7 @@ def definition_hash(root, options, locked_dir=None):
 def lock_hash(lock_data):
     """The hash a lockfile carries of its own content: the SHA-256 of the
     lockfile without `lockHash`, as compact JSON with sorted keys and
-    UTF-8 text. builtins.toJSON writes the same text, so nix/lib/lock.nix
+    UTF-8 text. builtins.toJSON writes the same text, so lib-overlays/default/lock.nix
     notices a lockfile edited by hand."""
     content = {k: v for k, v in lock_data.items() if k != "lockHash"}
     text = json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -1073,7 +1073,7 @@ def current_system():
 
 
 def nix_args(root, lock_path, locked_dir=None):
-    """The arguments of nix/lib/cli.nix for the project at root."""
+    """The arguments of pkgs/opam-purifier/cli.nix for the project at root."""
     _, nixpkgs, purifier = library()
     return [
         "--arg", "src", str(root),
@@ -1086,7 +1086,7 @@ def nix_args(root, lock_path, locked_dir=None):
 
 
 def nix_build(root, lock_path, attr, extra, locked_dir=None):
-    """A nix-build of an attribute of nix/lib/cli.nix. Nix checks the
+    """A nix-build of an attribute of pkgs/opam-purifier/cli.nix. Nix checks the
     lockfile as it evaluates, and names the command that fixes it."""
     lib, _, _ = library()
     return ["nix-build", f"{lib}/cli.nix", "-A", attr, *nix_args(root, lock_path, locked_dir), *extra]
