@@ -66,7 +66,7 @@ let
       export HOME="$TMPDIR" NIX_STATE_DIR="$TMPDIR/state" NIX_LOG_DIR="$TMPDIR/log"
       export NIX_CONF_DIR="$TMPDIR/conf"
       mkdir -p "$NIX_CONF_DIR"
-      cp -r ${../nix/lib} "$TMPDIR/lib"
+      cp -r ${../lib-overlays/default} "$TMPDIR/lib"
       ${setup}
       if nix-instantiate --eval --strict --readonly-mode --store dummy:// \
         -E "let read = import $TMPDIR/lib/lock.nix { lockFile = $TMPDIR/lock.json; src = $TMPDIR/src; };
@@ -106,7 +106,7 @@ let
     in
     {
       inherit dropped;
-      project = import ../nix/lib/project.nix { inherit purifier; } {
+      project = import ../pkgs/build-opam-project/project.nix { inherit purifier; } {
         inherit pkgs;
         src = withoutLockfile ./fixtures/workspace;
         lockFile = builtins.toFile "opam-purifier.lock.json" "${text}\n";
@@ -178,10 +178,10 @@ in
     let
       derivedOf =
         lockFile:
-        import ../nix/lib/derive.nix {
+        import ../lib-overlays/default/derive.nix {
           inherit lib;
           lock =
-            (import ../nix/lib/lock.nix {
+            (import ../lib-overlays/default/lock.nix {
               inherit lockFile;
               src = null;
             }).lock;

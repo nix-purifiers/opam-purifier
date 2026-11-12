@@ -33,6 +33,14 @@
   purifierSource,
 }:
 let
+  runtimeSource = lib.fileset.toSource {
+    root = ../..;
+    fileset = lib.fileset.unions [
+      ../../lib-overlays/default
+      ../build-opam-project
+      ./cli.nix
+    ];
+  };
   library =
     if purifierSource == null then
       throw "opam-purifier: the opam-purifier package needs the source of the purifier library; take it from the flake's package overlay"
@@ -52,7 +60,7 @@ stdenvNoCC.mkDerivation {
     makeWrapper ${python3}/bin/python3 "$out/bin/opam-purifier" \
       --add-flags "$out/libexec/opam-purifier.py" \
       --set OPAM_PURIFIER_SELF "$out/bin/opam-purifier" \
-      --set OPAM_PURIFIER_LIB ${../../nix/lib} \
+      --set OPAM_PURIFIER_LIB ${runtimeSource}/pkgs/opam-purifier \
       --set OPAM_PURIFIER_NIXPKGS ${path} \
       --set OPAM_PURIFIER_PURIFIER ${library} \
       --set OPAM_PURIFIER_BASH ${bash}/bin/bash \

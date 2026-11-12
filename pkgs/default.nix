@@ -5,8 +5,8 @@
 # the purifier library.
 { callPackage, lib, ... }:
 {
-  # The builder of the purifier contract (nix/lib/build-opam-project.nix).
-  buildOpamProject = callPackage ../nix/lib/build-opam-project.nix {
+  # The builder of the purifier contract (pkgs/build-opam-project/default.nix).
+  buildOpamProject = callPackage ./build-opam-project {
     inherit (lib) purifier;
   };
   # The `opam-purifier` command. It builds outside a flake with the source

@@ -183,7 +183,7 @@ The builder takes `src`, `lockFile` (the default is
 opam's lock files, in place of the ones in `src`), `fetchers`, `name`,
 `releasePackage`, `nativeBuildInputs`, `buildInputs` (for libraries that
 the depexts of the locked packages do not name) and `srcFilter`.
-`nix/lib/project.nix` documents each one.
+`pkgs/build-opam-project/project.nix` documents each one.
 
 The builder as a package takes the whole package set, `pkgs`, beside the
 packages it needs by name. The lockfile names the system dependencies of

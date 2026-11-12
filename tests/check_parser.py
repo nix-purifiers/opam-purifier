@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 #
-# Checks that the Nix parser of opam files (nix/lib/opam-file.nix) reads the
+# Checks that the Nix parser of opam files (lib-overlays/default/opam-file.nix) reads the
 # same sources as the parser of the command (`sources_of` in
 # bin/opam-purifier), on the opam files of a real lockfile:
 #
