@@ -1,0 +1,4 @@
+(library
+ (name greeting)
+ (public_name hello.greeting)
+ (libraries fmt))
