@@ -36,25 +36,6 @@ let
   };
 
   helloLock = ./fixtures/hello/opam-purifier.lock.json;
-  withoutLockfile =
-    path:
-    builtins.path {
-      inherit path;
-      name = "${baseNameOf path}-without-lockfile";
-      filter =
-        p: type:
-        baseNameOf p != "opam-purifier.lock.json" && !(lib.hasSuffix ".opam.locked" (baseNameOf p));
-    };
-
-  # A directory that holds only the opam lock files of a project.
-  onlyOpamLocked =
-    path:
-    builtins.path {
-      inherit path;
-      name = "${baseNameOf path}-opam-locked";
-      filter = p: type: (type == "directory" && p == toString path) || lib.hasSuffix ".opam.locked" p;
-    };
-
   # Evaluates the lockfile reader of the library on a lockfile and a
   # project inside the sandbox, and expects the evaluation to fail with a
   # message that contains `pattern`. It fails the way checkLock of the
@@ -103,13 +84,15 @@ let
       text = builtins.toJSON (
         edited // { lockHash = "sha256:${builtins.hashString "sha256" (builtins.toJSON edited)}"; }
       );
+      lockFile = ./fixtures/workspace-missing-uutf.lock.json;
     in
+    assert builtins.readFile lockFile == "${text}\n";
     {
       inherit dropped;
       project = import ../pkgs/build-opam-project/project.nix { inherit purifier; } {
         inherit pkgs;
-        src = withoutLockfile ./fixtures/workspace;
-        lockFile = builtins.toFile "opam-purifier.lock.json" "${text}\n";
+        src = ./fixtures/workspace;
+        inherit lockFile;
       };
     };
 in
@@ -144,15 +127,20 @@ in
   # hello-0.1.0/.
   hello-release =
     let
-      copy = build {
+      # Exercise the same archive builder without reading the computed copy
+      # back during evaluation: --no-build computes its path but writes nothing.
+      copy = import ../pkgs/build-opam-project/release-archive.nix {
+        inherit pkgs;
         src = builtins.path {
           path = ./fixtures/hello;
           name = "hello-copy";
         };
+        name = "hello";
+        version = "0.1.0";
       };
     in
     runCommand "hello-release" { } ''
-      cmp ${hello.release}/hello-0.1.0.tar.gz ${copy.release}/hello-0.1.0.tar.gz
+      cmp ${hello.release}/hello-0.1.0.tar.gz ${copy}/hello-0.1.0.tar.gz
       tar -tzf ${hello.release}/hello-0.1.0.tar.gz | grep -qx 'hello-0.1.0/hello.opam'
       touch $out
     '';
@@ -305,12 +293,17 @@ in
   conformance-external =
     let
       external = build {
-        src = withoutLockfile ./fixtures/hello;
+        src = ./fixtures/hello-external;
         lockFile = helloLock;
-        opamLocked = onlyOpamLocked ./fixtures/hello;
+        opamLocked = ./fixtures/hello-external-locks;
       };
     in
     runCommand "conformance-external" { } ''
+      ${pkgs.diffutils}/bin/diff -r --exclude=opam-purifier.lock.json --exclude='*.opam.locked' \
+        ${./fixtures/hello} ${./fixtures/hello-external}
+      cmp ${./fixtures/hello/hello.opam.locked} ${./fixtures/hello-external-locks/hello.opam.locked}
+      test ! -e ${./fixtures/hello-external}/opam-purifier.lock.json
+      test ! -e ${./fixtures/hello-external}/hello.opam.locked
       [ "$(${external.packages.hello.executables.hello})" = "Hello, Nix!" ]
       touch $out
     '';
